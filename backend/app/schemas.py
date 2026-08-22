@@ -27,6 +27,7 @@ class UserOut(BaseModel):
     store_id: Optional[int]
     store_name: Optional[str]
     plan: str
+    account_no: Optional[int] = None
     permissions: list[str]
 
 

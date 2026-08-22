@@ -21,6 +21,7 @@ def ensure_schema():
         ("companies", "phone", "VARCHAR(80) DEFAULT ''"),
         ("companies", "address", "VARCHAR(300) DEFAULT ''"),
         ("companies", "inn", "VARCHAR(32) DEFAULT ''"),
+        ("companies", "account_no", "INTEGER"),
         ("stores", "phone", "VARCHAR(80) DEFAULT ''"),
         ("sales", "customer_id", "INTEGER"),
         ("sales", "on_credit", "FLOAT DEFAULT 0"),
@@ -32,6 +33,21 @@ def ensure_schema():
             names = {r[1] for r in rows}
             if col not in names:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {typ}"))
+
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_account_no ON companies(account_no)"
+        ))
+        missing = conn.execute(text(
+            "SELECT id FROM companies WHERE account_no IS NULL OR account_no = 0 ORDER BY id"
+        )).fetchall()
+        if missing:
+            row = conn.execute(text("SELECT COALESCE(MAX(account_no), 100000) FROM companies")).fetchone()
+            n = int(row[0] or 100000)
+            if n < 100000:
+                n = 100000
+            for (cid,) in missing:
+                n += 1
+                conn.execute(text("UPDATE companies SET account_no = :n WHERE id = :id"), {"n": n, "id": cid})
 
 
 def get_db():

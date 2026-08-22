@@ -71,13 +71,6 @@ h3 { margin: 22px 0 10px; }
   .side { display: flex; gap: 6px; overflow: auto; }
   h1 { font-size: 32px; }
 }
-@media print {
-  body * { visibility: hidden; }
-  .receipt, .receipt * { visibility: visible; }
-  .receipt { position: absolute; left: 0; top: 0; box-shadow: none; }
-  .modal-actions { display: none !important; }
-}
-
 .kpi-card { display: flex; flex-direction: column; gap: 8px; }
 .kpi-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
 .kpi-ico { width: 18px; height: 18px; color: var(--gold); flex: 0 0 auto; }
@@ -255,4 +248,180 @@ select.field.need-customer {
 .btn-excel:hover { filter: brightness(1.05); }
 @media (max-width: 800px) {
   .his-kpi { grid-template-columns: 1fr; }
+}
+
+.set-sub { margin: 28px 0 12px; }
+.bill-wrap { display: grid; gap: 14px; margin: 8px 0 8px; }
+.bill-card {
+  background: #161b22;
+  border: 1px solid rgba(57,255,136,.28);
+  box-shadow: 0 0 28px rgba(57,255,136,.08);
+}
+.bill-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.bill-head h3 { margin: 6px 0 0; }
+.bill-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.bill-status.on {
+  color: #04140c;
+  background: #39ff88;
+  box-shadow: 0 0 16px rgba(57,255,136,.45);
+}
+.bill-status.off { color: #fff; background: #6b7280; }
+.bill-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+.bill-kpi {
+  background: #0f141b;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 12px;
+  padding: 12px;
+  min-width: 0;
+}
+.bill-kpi span { display: block; color: var(--muted); font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.bill-kpi b { display: block; font-size: 18px; color: var(--text); word-break: break-word; }
+.bill-id { color: #39ff88 !important; letter-spacing: .06em; font-variant-numeric: tabular-nums; }
+.bill-hint {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  background: rgba(57,255,136,.06);
+  border: 1px dashed rgba(57,255,136,.28);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.bill-hint b { color: #39ff88; }
+.bill-table-card { background: #161b22; }
+.bill-table-head { margin-bottom: 10px; }
+.table-scroll { overflow-x: auto; }
+.pay-st { font-weight: 800; font-size: 12px; letter-spacing: .04em; }
+.pay-paid { color: #39ff88; }
+.pay-due { color: var(--gold); }
+.offer-link {
+  display: inline-block;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.offer-link:hover { color: #39ff88; }
+@media (max-width: 900px) {
+  .bill-kpis { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 640px) {
+  .bill-kpis { grid-template-columns: 1fr; }
+}
+
+.td-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.cennik-dialog {
+  width: min(440px, 94vw);
+  background: #161b22;
+  border: 1px solid rgba(57,255,136,.28);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 0 28px rgba(57,255,136,.08);
+}
+.cennik-preview-wrap {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0;
+  padding: 16px;
+  background: #0f141b;
+  border-radius: 12px;
+}
+.cennik-label {
+  width: 58mm;
+  height: 30mm;
+  background: #fff;
+  color: #111;
+  border: 1px solid #ddd;
+  border-radius: 2px;
+  padding: 1.6mm 2mm 1.2mm;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  overflow: hidden;
+  font-family: Arial, Helvetica, sans-serif;
+}
+.cennik-shop {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  text-align: center;
+  color: #111;
+  line-height: 1.1;
+}
+.cennik-name {
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1.15;
+  max-height: 8.4mm;
+  overflow: hidden;
+  color: #000;
+}
+.cennik-barcode, .cennik-barcode-ph {
+  width: 52mm;
+  max-height: 11mm;
+}
+.cennik-barcode-ph {
+  font-size: 9px;
+  letter-spacing: .2em;
+  text-align: center;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.cennik-price {
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+  color: #000;
+  line-height: 1;
+}
+.cennik-controls {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+.cennik-sheet {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+}
+@media print {
+  body * { visibility: hidden; }
+  body:not(.printing-cennik) .receipt,
+  body:not(.printing-cennik) .receipt * { visibility: visible; }
+  body.printing-cennik .cennik-sheet,
+  body.printing-cennik .cennik-sheet * { visibility: visible; }
+  .receipt { position: absolute; left: 0; top: 0; box-shadow: none; }
+  body.printing-cennik .cennik-sheet {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2mm;
+    background: #fff;
+  }
+  body.printing-cennik .cennik-label {
+    border: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .modal-actions { display: none !important; }
 }

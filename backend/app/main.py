@@ -48,9 +48,9 @@ def assets(file_path: str):
         raise HTTPException(404)
     if not os.path.isfile(full):
         raise HTTPException(404)
-    return FileResponse(full)
+    return FileResponse(full, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/")
 def home():
-    return FileResponse(str(WEB_DIR / "index.html"))
+    return FileResponse(str(WEB_DIR / "index.html"), headers={"Cache-Control": "no-cache, must-revalidate"})

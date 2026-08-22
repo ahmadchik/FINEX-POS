@@ -16,6 +16,7 @@ class Company(Base):
     phone: Mapped[str] = mapped_column(String(80), default="")
     address: Mapped[str] = mapped_column(String(300), default="")
     inn: Mapped[str] = mapped_column(String(32), default="")
+    account_no: Mapped[Optional[int]] = mapped_column(Integer, unique=True, index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="company")
@@ -187,3 +188,12 @@ class CashTxn(Base):
     note: Mapped[str] = mapped_column(String(300), default="")
     sale_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sales.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+ACCOUNT_NO_START = 100001
+
+
+def next_account_no(db) -> int:
+    current = db.query(func.max(Company.account_no)).scalar()
+    n = int(current or (ACCOUNT_NO_START - 1)) + 1
+    return n if n >= ACCOUNT_NO_START else ACCOUNT_NO_START

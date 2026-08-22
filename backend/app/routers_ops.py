@@ -1,10 +1,13 @@
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 import io
 import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException
+import os
 from fastapi.responses import Response
+from .report_xlsx import content_disposition, export_filename, fill_hisobot_xlsx
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -15,6 +18,8 @@ from .schemas import CashCreate, StaffIn, StaffPatch, StockInCreate
 from .security import ROLES, hash_password
 
 router = APIRouter(prefix="/api", tags=["ops"])
+
+TEMPLATE_XLSX = os.path.normpath(os.path.join(os.path.dirname(__file__), "web", "assets", "docs", "Finex_Hisobot_template.xlsx"))
 
 
 @router.post("/stock-ins")
@@ -340,6 +345,117 @@ def _xlsx_bytes(headers, rows):
     return buf.getvalue()
 
 
+
+def _turnover_rows(user, db, store, start, end):
+    products = (
+        db.query(Product)
+        .filter(Product.company_id == user.company_id, Product.store_id == store.id)
+        .all()
+    )
+    by_id = {p.id: p for p in products}
+    ins = defaultdict(lambda: {"before": 0.0, "period": 0.0, "after": 0.0, "period_sum": 0.0})
+    outs = defaultdict(lambda: {"before": 0.0, "period": 0.0, "after": 0.0, "period_sum": 0.0})
+    names = {}
+    units = {}
+    prices = {}
+
+    for p in products:
+        names[p.id] = p.name
+        units[p.id] = p.unit or "dona"
+        prices[p.id] = float(p.buy_price or 0) or float(p.sell_price or 0)
+
+    kirim_q = (
+        db.query(StockInItem, StockIn, Product)
+        .join(StockIn, StockInItem.stock_in_id == StockIn.id)
+        .join(Product, StockInItem.product_id == Product.id)
+        .filter(StockIn.company_id == user.company_id, StockIn.store_id == store.id)
+        .all()
+    )
+    for item, doc, product in kirim_q:
+        pid = item.product_id
+        qty = float(item.qty or 0)
+        price = float(item.buy_price or 0) or float(product.buy_price or 0) or prices.get(pid, 0)
+        names[pid] = product.name if product else names.get(pid, "Tovar")
+        units[pid] = (product.unit if product else None) or units.get(pid, "dona")
+        if price:
+            prices[pid] = price
+        at = doc.created_at
+        rec = ins[pid]
+        if at is None or at < start:
+            rec["before"] += qty
+        elif at < end:
+            rec["period"] += qty
+            rec["period_sum"] += qty * price
+        else:
+            rec["after"] += qty
+
+    sales_q = (
+        db.query(SaleItem, Sale)
+        .join(Sale, SaleItem.sale_id == Sale.id)
+        .filter(
+            Sale.company_id == user.company_id,
+            Sale.store_id == store.id,
+            Sale.status != "RETURNED",
+        )
+        .all()
+    )
+    for item, sale in sales_q:
+        pid = item.product_id
+        qty = float(item.qty or 0)
+        cost = float(item.buy_price or 0) or prices.get(pid, 0)
+        names[pid] = item.name or names.get(pid, "Tovar")
+        if pid in by_id:
+            units[pid] = by_id[pid].unit or units.get(pid, "dona")
+            if not cost:
+                cost = float(by_id[pid].buy_price or 0) or float(by_id[pid].sell_price or 0)
+        prices[pid] = prices.get(pid, 0) or cost
+        rec = outs[pid]
+        at = sale.created_at
+        if at is None or at < start:
+            rec["before"] += qty
+        elif at < end:
+            rec["period"] += qty
+            rec["period_sum"] += qty * cost
+        else:
+            rec["after"] += qty
+
+    rows = []
+    opening_stock = 0.0
+    ids = sorted(set(by_id) | set(ins) | set(outs), key=lambda i: (names.get(i) or "").lower())
+    n = 0
+    for pid in ids:
+        p = by_id.get(pid)
+        stock = float(p.stock or 0) if p else 0.0
+        price = float(prices.get(pid) or 0)
+        in_qty = ins[pid]["period"]
+        out_qty = outs[pid]["period"]
+        close_qty = stock - ins[pid]["after"] + outs[pid]["after"]
+        open_qty = close_qty - in_qty + out_qty
+        open_sum = round(open_qty * price, 2)
+        in_sum = round(ins[pid]["period_sum"] or (in_qty * price), 2)
+        out_sum = round(outs[pid]["period_sum"] or (out_qty * price), 2)
+        close_sum = round(close_qty * price, 2)
+        if not any([open_qty, in_qty, out_qty, close_qty, stock]):
+            continue
+        n += 1
+        opening_stock += open_sum
+        rows.append({
+            "n": n,
+            "name": names.get(pid) or (p.name if p else "Tovar"),
+            "unit": units.get(pid) or "dona",
+            "price": round(price, 2),
+            "open_qty": round(open_qty, 3),
+            "open_sum": open_sum,
+            "in_qty": round(in_qty, 3),
+            "in_sum": in_sum,
+            "out_qty": round(out_qty, 3),
+            "out_sum": out_sum,
+            "close_qty": round(close_qty, 3),
+            "close_sum": close_sum,
+        })
+    return rows, round(opening_stock, 2)
+
+
 def _reports_data(user, db, date_from, date_to, op_type):
     store = current_store(user, db)
     start = datetime.fromisoformat(date_from.strip()[:10]) if date_from.strip() else datetime(1970, 1, 1)
@@ -451,16 +567,24 @@ def _reports_data(user, db, date_from, date_to, op_type):
     ):
         stock_value += float(p.stock or 0) * float(p.buy_price or 0)
 
+    turnover, opening_stock = _turnover_rows(user, db, store, start, end)
+    period_from = date_from.strip()[:10] if date_from.strip() else ""
+    period_to = date_to.strip()[:10] if date_to.strip() else ""
     return {
         "kirim": round(kirim_total, 2),
         "chiqim": round(chiqim_total, 2),
         "stock_value": round(stock_value, 2),
+        "opening_stock": opening_stock,
+        "store_name": store.name if store else "",
+        "date_from": period_from,
+        "date_to": period_to,
         "chart": {
             "labels": days,
             "kirim": [round(chart_map[d]["kirim"], 2) for d in days],
             "chiqim": [round(chart_map[d]["chiqim"], 2) for d in days],
         },
         "rows": rows,
+        "turnover": turnover,
     }
 
 
@@ -480,28 +604,17 @@ def reports_export(
     date_from: str = "",
     date_to: str = "",
     op_type: str = "all",
+    report_no: str = "00001",
     user: User = Depends(require_perm("reports")),
     db: Session = Depends(get_db),
 ):
     data = _reports_data(user, db, date_from, date_to, op_type)
-    headers = ["Sana", "Tur", "Mahsulot/Kategoriya", "Miqdor", "Summa", "Hujjat"]
-    xrows = []
-    for r in data.get("rows") or []:
-        xrows.append([
-            (r.get("at") or "")[:19].replace("T", " "),
-            "Kirim" if r.get("type") == "kirim" else "Chiqim",
-            r.get("title") or "",
-            r.get("qty") or 0,
-            r.get("amount") or 0,
-            r.get("ref") or "",
-        ])
-    if not xrows:
-        xrows.append(["", "", "Malumot yoq", "", "", ""])
-    body = _xlsx_bytes(headers, xrows)
+    name = export_filename(date_from, date_to)
+    body = fill_hisobot_xlsx(TEMPLATE_XLSX, data, report_no=report_no or "00001")
     return Response(
         content=body,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="Finex_Hisobot.xlsx"'},
+        headers={"Content-Disposition": content_disposition(name)},
     )
 
 

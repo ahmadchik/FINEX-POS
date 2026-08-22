@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .deps import get_current_user
-from .models import Category, Company, Product, Store, User
+from .models import Category, Company, Product, Store, User, next_account_no
 from .schemas import LoginIn, RegisterIn, TokenOut, UserOut
 from .security import ROLE_PERMS, create_token, hash_password, verify_password
 
@@ -32,6 +32,7 @@ def user_out(db: Session, user: User) -> UserOut:
         store_id=store.id if store else None,
         store_name=store.name if store else None,
         plan=company.plan if company else "FREE",
+        account_no=company.account_no if company else None,
         permissions=sorted(ROLE_PERMS.get(user.role, set())),
     )
 
@@ -68,7 +69,7 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(409, "Bu login band")
 
-    company = Company(name=body.company_name.strip(), plan="FREE")
+    company = Company(name=body.company_name.strip(), plan="FREE", account_no=next_account_no(db))
     db.add(company)
     db.flush()
     store = Store(company_id=company.id, name=body.store_name.strip() or "Asosiy do'kon")

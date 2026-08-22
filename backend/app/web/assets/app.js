@@ -196,7 +196,8 @@ function shell(inner) {
     </div>
     <div class="modal hidden" id="receipt-modal"></div>
     <div class="modal hidden" id="confirm-modal"></div>
-    <div class="modal hidden" id="sale-modal"></div>`;
+    <div class="modal hidden" id="sale-modal"></div>
+    <div class="modal hidden" id="cennik-modal"></div>`;
 }
 
 function ico(path) {
@@ -250,6 +251,112 @@ async function pageDashboard() {
     </div>`;
 }
 
+
+function cennikShopName() {
+  const u = user() || {};
+  return (u.store_name || u.company_name || "FINEX POS").trim();
+}
+
+function cennikLabelHtml(p) {
+  return `<article class="cennik-label">
+    <div class="cennik-shop">${esc(cennikShopName())}</div>
+    <div class="cennik-name">${esc(p.name || "")}</div>
+    <svg class="cennik-barcode"></svg>
+    <div class="cennik-price">Jami: ${money(p.sell_price)}</div>
+  </article>`;
+}
+
+function drawCennikBarcodes(root, code) {
+  const value = String(code || "").trim() || "000000";
+  const nodes = root ? root.querySelectorAll("svg.cennik-barcode") : [];
+  nodes.forEach((svg) => {
+    if (typeof window.JsBarcode !== "function") {
+      svg.outerHTML = '<div class="cennik-barcode-ph">' + esc(value) + "</div>";
+      return;
+    }
+    try {
+      window.JsBarcode(svg, value, {
+        format: "CODE128",
+        lineColor: "#111",
+        background: "#fff",
+        width: 1.2,
+        height: 28,
+        displayValue: true,
+        fontSize: 9,
+        margin: 0,
+        textMargin: 1,
+      });
+    } catch (e) {
+      try {
+        window.JsBarcode(svg, value, {
+          format: "CODE39",
+          lineColor: "#111",
+          background: "#fff",
+          width: 1,
+          height: 28,
+          displayValue: true,
+          fontSize: 9,
+          margin: 0,
+        });
+      } catch (e2) {
+        svg.insertAdjacentHTML("afterend", '<div class="cennik-barcode-ph">' + esc(value) + "</div>");
+      }
+    }
+  });
+}
+
+function fillCennikSheet(p, qty) {
+  const sheet = document.getElementById("cennik-sheet");
+  const preview = document.getElementById("cennik-preview");
+  const n = Math.max(1, Math.min(200, Number(qty) || 1));
+  if (preview) preview.innerHTML = cennikLabelHtml(p);
+  if (sheet) sheet.innerHTML = Array.from({ length: n }, () => cennikLabelHtml(p)).join("");
+  drawCennikBarcodes(preview, p.barcode);
+  drawCennikBarcodes(sheet, p.barcode);
+}
+
+function openCennikModal(p) {
+  const modal = document.getElementById("cennik-modal");
+  if (!modal || !p) return;
+  modal.classList.remove("hidden");
+  modal.innerHTML = `
+    <div class="cennik-dialog">
+      <div class="bill-head">
+        <div>
+          <div class="kicker">Chop etish</div>
+          <h3>Cennik</h3>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="cennik-close">Yopish</button>
+      </div>
+      <p class="muted">Termoetiketka 58×30 mm — ${esc(p.name || "")}</p>
+      <div class="cennik-preview-wrap" id="cennik-preview"></div>
+      <div class="cennik-controls">
+        <label class="set-field">Soni
+          <input class="field" id="cennik-qty" type="number" min="1" max="200" value="1" />
+        </label>
+        <button type="button" class="btn btn-excel" id="cennik-print">Chop etish</button>
+      </div>
+      <div id="cennik-sheet" class="cennik-sheet"></div>
+    </div>`;
+  fillCennikSheet(p, 1);
+  const close = () => {
+    document.body.classList.remove("printing-cennik");
+    modal.classList.add("hidden");
+    modal.innerHTML = "";
+  };
+  document.getElementById("cennik-close").onclick = close;
+  document.getElementById("cennik-qty").addEventListener("input", (e) => fillCennikSheet(p, e.target.value));
+  document.getElementById("cennik-print").onclick = () => {
+    fillCennikSheet(p, document.getElementById("cennik-qty")?.value);
+    document.body.classList.add("printing-cennik");
+    window.print();
+    document.body.classList.remove("printing-cennik");
+  };
+  modal.onclick = (e) => {
+    if (e.target === modal) close();
+  };
+}
+
 async function pageProducts() {
   const rows = await api("/api/products");
   window.__products = rows;
@@ -274,7 +381,7 @@ async function pageProducts() {
       <input class="field" id="p-filter" placeholder="Jadvaldan qidirish: nomi yoki barcode..." />
     </div>
     <table class="table" id="p-table">
-      <thead><tr><th>Nomi</th><th>Barcode</th><th>Narx</th><th>Qoldiq</th><th></th></tr></thead>
+      <thead><tr><th>Nomi</th><th>Barcode</th><th>Narx</th><th>Qoldiq</th><th>Amallar</th></tr></thead>
       <tbody>
       ${rows
         .map((p) => {
@@ -284,6 +391,7 @@ async function pageProducts() {
             <td class="${low ? "stock-low" : ""}">${p.stock} ${esc(p.unit)}${low ? ` <span class="muted">(min ${p.min_stock})</span>` : ""}</td>
             <td>
               <button class="btn btn-ghost btn-sm" data-edit='${esc(JSON.stringify(p))}'>Tahrir</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-cennik="${p.id}">Cennik</button>
               <button class="btn btn-ghost btn-sm" data-toggle="${p.id}" data-name="${esc(p.name)}" data-active="${p.is_active ? "1" : "0"}">${p.is_active ? "O'chirish" : "Yoqish"}</button>
             </td>
           </tr>`;
@@ -1111,15 +1219,159 @@ function saveLocalSettings(data) {
   localStorage.setItem(settingsKey(), JSON.stringify(payload));
 }
 
+
+function fmtDay(iso) {
+  if (!iso) return "—";
+  const raw = String(iso).slice(0, 10);
+  const p = raw.split("-");
+  if (p.length === 3 && p[0].length === 4) return p[2] + "." + p[1] + "." + p[0];
+  return raw;
+}
+
+function uzMonthPeriod(d) {
+  const months = ["Yanvar","Fevral","Mart","Aprel","May","Iyun","Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr"];
+  return months[d.getMonth()] + " " + d.getFullYear();
+}
+
+function planPrice(plan) {
+  const map = { FREE: 0, PRO: 80000, ENTERPRISE: 160000, VIP: 500000 };
+  return map[String(plan || "FREE").toUpperCase()] || 0;
+}
+
+function billingFallback(plan) {
+  const u = user() || {};
+  const id = Number(u.account_no || 0) || 100000 + Number(u.id || u.company_id || 0);
+  const until = new Date();
+  until.setDate(until.getDate() + 30);
+  const p = String(plan || "FREE").toUpperCase();
+  const price = planPrice(p);
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const payments = price
+    ? [{
+        n: 1,
+        at: "",
+        period: uzMonthPeriod(now),
+        amount: price,
+        method: "",
+        status: "unpaid",
+      }]
+    : [];
+  return {
+    account_id: id,
+    balance: 0,
+    plan: p,
+    status: "ACTIVE",
+    expires_at: until.getFullYear() + "-" + pad(until.getMonth() + 1) + "-" + pad(until.getDate()),
+    payments,
+  };
+}
+
+async function fetchBilling(plan) {
+  try {
+    const data = await api("/api/billing");
+    if (data && data.account_id) return data;
+  } catch (e) {}
+  return billingFallback(plan);
+}
+
+function payStatusLabel(st) {
+  return st === "paid" ? "To‘langan" : "To‘lanmagan";
+}
+
+function payMethodLabel(m) {
+  if (!m) return "—";
+  const v = String(m).toLowerCase();
+  if (v === "click") return "Click";
+  if (v === "payme") return "Payme";
+  if (v === "cash" || v === "naqd") return "Naqd";
+  return m;
+}
+
+function renderBilling(b) {
+  const rows = b.payments || [];
+  const body = rows.length
+    ? rows
+        .map(
+          (r, i) => `<tr>
+            <td>${esc(r.n || i + 1)}</td>
+            <td>${esc(fmtDay(r.at))}</td>
+            <td>${esc(r.period || "—")}</td>
+            <td>${money(r.amount)}</td>
+            <td>${esc(payMethodLabel(r.method))}</td>
+            <td><span class="pay-st ${r.status === "paid" ? "pay-paid" : "pay-due"}">${payStatusLabel(r.status)}</span></td>
+          </tr>`
+        )
+        .join("")
+    : '<tr><td colspan="6" class="muted">Hali to‘lovlar yo‘q</td></tr>';
+  const active = String(b.status || "ACTIVE").toUpperCase() === "ACTIVE";
+  return `
+    <section class="bill-wrap" id="billing">
+      <div class="card bill-card">
+        <div class="bill-head">
+          <div>
+            <div class="kicker">Billing</div>
+            <h3>Shaxsiy hisob va Tariflar</h3>
+          </div>
+          <span class="bill-status ${active ? "on" : "off"}">${active ? "AKTIV" : "NOFAOL"}</span>
+        </div>
+        <div class="bill-kpis">
+          <div class="bill-kpi">
+            <span>Foydalanuvchi ID</span>
+            <b class="bill-id">ID: ${esc(b.account_id)}</b>
+          </div>
+          <div class="bill-kpi">
+            <span>Balans</span>
+            <b>${money(b.balance)}</b>
+          </div>
+          <div class="bill-kpi">
+            <span>Joriy tarif</span>
+            <b>${esc(b.plan || "FREE")} tarif</b>
+          </div>
+          <div class="bill-kpi">
+            <span>Amal qilish</span>
+            <b>${active ? "AKTIV" : "NOFAOL"} — ${esc(fmtDay(b.expires_at))} gacha</b>
+          </div>
+        </div>
+        <p class="bill-hint">Hisobni to‘ldirish uchun Click yoki Payme ilovasidan <b>FINEX POS</b> ni qidiring va yuqoridagi ID raqamingizni kiriting.</p>
+      </div>
+      <div class="card bill-table-card">
+        <div class="bill-table-head"><b>To‘lovlar tarixi</b></div>
+        <div class="table-scroll">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>№</th>
+                <th>Sana</th>
+                <th>Oy</th>
+                <th>Summa</th>
+                <th>To‘lov turi</th>
+                <th>Holati</th>
+              </tr>
+            </thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+        <a class="offer-link" href="/assets/docs/oferta.html" target="_blank" rel="noopener">Ommaviy oferta shartnomasini ko‘rish</a>
+      </div>
+    </section>`;
+}
+
 async function pageSettings() {
   const s = await api("/api/settings");
   const local = loadLocalSettings();
   const init = { ...s, ...(local || {}) };
   init.plan = s.plan;
+  let billing = billingFallback(init.plan);
+  try {
+    const remote = await fetchBilling(init.plan);
+    if (remote && remote.account_id) billing = remote;
+  } catch (e) {}
   const v = (k) => esc(init[k] || "");
   return `
     <h2>Sozlamalar</h2>
-    <p class="muted">Tarif: ${esc(init.plan || "")}</p>
+    ${renderBilling(billing)}
+    <h3 class="set-sub">Do‘kon ma’lumotlari</h3>
     <form id="set-form" class="card">
       <div class="set-grid">
         <label class="set-field">Kompaniya
@@ -1201,7 +1453,210 @@ function drawHisChart(chart) {
   });
 }
 
-async function exportHisExcel(rows) {
+function nextHisobotNo() {
+  const key = "finex_hisobot_no_" + (user()?.company_id || "0");
+  const n = Number(localStorage.getItem(key) || 0) + 1;
+  localStorage.setItem(key, String(n));
+  return String(n).padStart(5, "0");
+}
+
+function excelSerial(iso) {
+  const raw = String(iso || "").slice(0, 10);
+  const p = raw.split("-");
+  if (p.length !== 3) return null;
+  const y = Number(p[0]);
+  const m = Number(p[1]);
+  const d = Number(p[2]);
+  if (!y || !m || !d) return null;
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+}
+
+function dmy(iso) {
+  const raw = String(iso || "").slice(0, 10);
+  const p = raw.split("-");
+  if (p.length !== 3) return raw;
+  return p[2] + "." + p[1] + "." + p[0];
+}
+
+function hisobotFileName(dateFrom, dateTo) {
+  const a = dmy(dateFrom) || "";
+  const b = dmy(dateTo) || "";
+  if (a && b) return "Finex_Hisobot (" + a + "-" + b + ").xlsx";
+  return "Finex_Hisobot.xlsx";
+}
+
+function moneyFmt() {
+  return '_-* #,##0.00_-;\-* #,##0.00_-;_-* "-"??_-;_-@_-';
+}
+
+function setDateCell(ws, addr, iso) {
+  const serial = excelSerial(iso);
+  if (serial == null) {
+    ws[addr] = { t: "s", v: iso || "" };
+    return;
+  }
+  ws[addr] = { t: "n", v: serial, z: "dd.mm.yyyy" };
+}
+
+function buildFinexHisobotWb(payload, reportNo) {
+  const XLSX = window.XLSX;
+  const range = hisRange(window.__his || {});
+  const dateFrom = payload.date_from || range.date_from || "";
+  const dateTo = payload.date_to || range.date_to || "";
+  const shop = payload.store_name || (user() && user().store_name) || (user() && user().company_name) || "";
+  const no = reportNo || nextHisobotNo();
+  const rows = payload.rows || window.__hisRows || [];
+  const kirim = rows.filter((r) => r.type === "kirim").reduce((s, r) => s + Number(r.amount || 0), 0);
+  const chiqim = rows.filter((r) => r.type === "chiqim").reduce((s, r) => s + Number(r.amount || 0), 0);
+  const opening = Number(payload.opening_stock || 0);
+  const closing = opening + kirim - chiqim;
+  const fmt = moneyFmt();
+
+  const logAoA = [
+    ["Finex-hisobot №", no, "", "", "hisobot davri boshlanishi", ""],
+    ["Do'kon nomi", shop, "", "", "hisobot davri tugashi", ""],
+    [],
+    ["Sana", "Tur", "Mahsulot/Kategoriya", "Miqdor", "Summa", "Hujjat"],
+  ];
+  rows.forEach((r) => {
+    logAoA.push([
+      (r.at || "").slice(0, 19).replace("T", " "),
+      r.type === "kirim" ? "Kirim" : "Chiqim",
+      r.title || "",
+      Number(r.qty || 0),
+      Number(r.amount || 0),
+      r.ref || "",
+    ]);
+  });
+  logAoA.push([]);
+  logAoA.push(["Davr boshidagi qoldiq:", "", opening]);
+  logAoA.push(["Hisobot davrida kirim:", "", Math.round(kirim * 100) / 100]);
+  logAoA.push(["Hisobot davrida chiqim:", "", Math.round(chiqim * 100) / 100]);
+  logAoA.push(["Davr oxiridagi qoldiq:", "", Math.round(closing * 100) / 100]);
+
+  const ws1 = XLSX.utils.aoa_to_sheet(logAoA);
+  setDateCell(ws1, "F1", dateFrom);
+  setDateCell(ws1, "F2", dateTo);
+  const firstData = 5;
+  const lastData = 4 + rows.length;
+  for (let r = firstData; r <= lastData; r++) {
+    const cell = ws1[XLSX.utils.encode_cell({ r: r - 1, c: 4 })];
+    if (cell && cell.t === "n") cell.z = fmt;
+  }
+  ["C20", "C21", "C22", "C23"].forEach((addr) => {
+    const real = XLSX.utils.encode_cell({ r: logAoA.length - 4 + ["C20", "C21", "C22", "C23"].indexOf(addr), c: 2 });
+    const cell = ws1[real];
+    if (cell && cell.t === "n") cell.z = fmt;
+  });
+  const totStart = logAoA.length - 4;
+  for (let i = 0; i < 4; i++) {
+    const cell = ws1[XLSX.utils.encode_cell({ r: totStart + i, c: 2 })];
+    if (cell && typeof cell.v === "number") cell.z = fmt;
+  }
+  ws1["!cols"] = [
+    { wch: 20.4 },
+    { wch: 10.4 },
+    { wch: 19.8 },
+    { wch: 12.1 },
+    { wch: 12.8 },
+    { wch: 19 },
+  ];
+  if (ws1["!rows"]) ws1["!rows"][3] = { hpt: 27.75 };
+  else ws1["!rows"] = [null, null, null, { hpt: 27.75 }];
+
+  const turn = payload.turnover || [];
+  const qayAoA = [
+    ["", "Finex-hisobot №", no, "", "", "", "hisobot davri boshlanishi", ""],
+    ["", "Do'kon nomi", shop, "", "", "", "hisobot davri tugashi", ""],
+    ["№", "Tovarlar nomi", "O'lchov birligi", "Narxi", "Davr boshiga qoldiq", "", "Kirim", "", "Chiqim", "", "Davr oxiriga qoldiq", ""],
+    ["", "", "", "", "Miqdor", "Summa", "Miqdor", "Summa", "Miqdor", "Summa", "Miqdor", "Summa"],
+    ["", "", "", "", "", "", "", "", "", "", "", ""],
+    ["Jami", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0],
+  ];
+  turn.forEach((t) => {
+    qayAoA.push([
+      t.n,
+      t.name || "",
+      t.unit || "",
+      Number(t.price || 0),
+      Number(t.open_qty || 0),
+      Number(t.open_sum || 0),
+      Number(t.in_qty || 0),
+      Number(t.in_sum || 0),
+      Number(t.out_qty || 0),
+      Number(t.out_sum || 0),
+      Number(t.close_qty || 0),
+      Number(t.close_sum || 0),
+    ]);
+  });
+  const firstProd = 7;
+  const lastProd = turn.length ? 6 + turn.length : 6;
+  qayAoA.push([]);
+  qayAoA.push([]);
+  qayAoA.push(["", "Do'kon mudiri _________________________________"]);
+
+  const ws2 = XLSX.utils.aoa_to_sheet(qayAoA);
+  setDateCell(ws2, "H1", dateFrom);
+  setDateCell(ws2, "H2", dateTo);
+  const sumRow = 6;
+  const sumCols = [4, 5, 6, 7, 8, 9, 10, 11];
+  sumCols.forEach((c) => {
+    const addr = XLSX.utils.encode_cell({ r: sumRow - 1, c: c });
+    const col = XLSX.utils.encode_col(c);
+    if (turn.length) {
+      ws2[addr] = { t: "n", f: "SUM(" + col + firstProd + ":" + col + lastProd + ")", z: c % 2 === 1 ? fmt : "0.000" };
+    } else {
+      ws2[addr] = { t: "n", v: 0, z: c % 2 === 1 ? fmt : "0.000" };
+    }
+  });
+  for (let r = firstProd; r <= lastProd; r++) {
+    [3, 5, 7, 9, 11].forEach((c) => {
+      const cell = ws2[XLSX.utils.encode_cell({ r: r - 1, c: c })];
+      if (cell && cell.t === "n") cell.z = fmt;
+    });
+  }
+  ws2["!merges"] = [
+    { s: { r: 2, c: 0 }, e: { r: 4, c: 0 } },
+    { s: { r: 2, c: 1 }, e: { r: 4, c: 1 } },
+    { s: { r: 2, c: 2 }, e: { r: 4, c: 2 } },
+    { s: { r: 2, c: 3 }, e: { r: 4, c: 3 } },
+    { s: { r: 2, c: 4 }, e: { r: 2, c: 5 } },
+    { s: { r: 2, c: 6 }, e: { r: 2, c: 7 } },
+    { s: { r: 2, c: 8 }, e: { r: 2, c: 9 } },
+    { s: { r: 2, c: 10 }, e: { r: 2, c: 11 } },
+    { s: { r: 3, c: 4 }, e: { r: 4, c: 4 } },
+    { s: { r: 3, c: 5 }, e: { r: 4, c: 5 } },
+    { s: { r: 3, c: 6 }, e: { r: 4, c: 6 } },
+    { s: { r: 3, c: 7 }, e: { r: 4, c: 7 } },
+    { s: { r: 3, c: 8 }, e: { r: 4, c: 8 } },
+    { s: { r: 3, c: 9 }, e: { r: 4, c: 9 } },
+    { s: { r: 3, c: 10 }, e: { r: 4, c: 10 } },
+    { s: { r: 3, c: 11 }, e: { r: 4, c: 11 } },
+    { s: { r: 5, c: 0 }, e: { r: 5, c: 3 } },
+  ];
+  ws2["!cols"] = [
+    { wch: 6.8 },
+    { wch: 31.1 },
+    { wch: 11 },
+    { wch: 9.6 },
+    { wch: 12.1 },
+    { wch: 16.6 },
+    { wch: 12 },
+    { wch: 16.6 },
+    { wch: 12.7 },
+    { wch: 16.6 },
+    { wch: 12.3 },
+    { wch: 16.6 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws1, "Сум");
+  XLSX.utils.book_append_sheet(wb, ws2, "Микдор");
+  wb.__fileName = hisobotFileName(dateFrom, dateTo);
+  return wb;
+}
+
+async function exportHisExcel() {
   const downloadBlob = (blob, name) => {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1213,43 +1668,50 @@ async function exportHisExcel(rows) {
   };
   const state = window.__his || {};
   const range = hisRange(state);
+  const no = nextHisobotNo();
   try {
     const q = new URLSearchParams({
       date_from: range.date_from || "",
       date_to: range.date_to || "",
       op_type: state.op_type || "all",
+      report_no: no,
     });
     const res = await fetch("/api/reports/export?" + q.toString(), {
       headers: token() ? { Authorization: "Bearer " + token() } : {},
     });
     if (res.ok) {
-      downloadBlob(await res.blob(), "Finex_Hisobot.xlsx");
+      downloadBlob(await res.blob(), hisobotFileName(range.date_from, range.date_to));
       return;
     }
   } catch (e) {}
-  const data = (rows || window.__hisRows || []).map((r) => ({
-    Sana: (r.at || "").slice(0, 19).replace("T", " "),
-    Tur: r.type === "kirim" ? "Kirim" : "Chiqim",
-    "Mahsulot/Kategoriya": r.title || "",
-    Miqdor: r.qty,
-    Summa: r.amount,
-    Hujjat: r.ref || "",
-  }));
+  let payload = window.__hisData;
+  if (!payload) {
+    const state = window.__his || {};
+    const range = hisRange(state);
+    try {
+      payload = await fetchReports({
+        date_from: range.date_from || "",
+        date_to: range.date_to || "",
+        op_type: state.op_type || "all",
+      });
+    } catch (e) {
+      payload = { rows: window.__hisRows || [], turnover: [] };
+    }
+  }
   if (window.XLSX && window.XLSX.utils) {
-    const wb = window.XLSX.utils.book_new();
-    const ws = window.XLSX.utils.json_to_sheet(
-      data.length ? data : [{ Sana: "", Tur: "", "Mahsulot/Kategoriya": "", Miqdor: "", Summa: "", Hujjat: "" }]
-    );
-    window.XLSX.utils.book_append_sheet(wb, ws, "Hisobot");
-    window.XLSX.writeFile(wb, "Finex_Hisobot.xlsx");
+    const wb = buildFinexHisobotWb(payload, no);
+    window.XLSX.writeFile(wb, wb.__fileName || "Finex_Hisobot.xlsx");
     return;
   }
-  const escCell = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  const table =
-    "<table><tr><th>Sana</th><th>Tur</th><th>Mahsulot/Kategoriya</th><th>Miqdor</th><th>Summa</th><th>Hujjat</th></tr>" +
-    data.map((r) => "<tr><td>" + Object.values(r).map(escCell).join("</td><td>") + "</td></tr>").join("") +
-    "</table>";
-  downloadBlob(new Blob(["\ufeff" + table], { type: "application/vnd.ms-excel" }), "Finex_Hisobot.xls");
+  const q = new URLSearchParams({
+    date_from: (payload && payload.date_from) || "",
+    date_to: (payload && payload.date_to) || "",
+    op_type: (window.__his && window.__his.op_type) || "all",
+  });
+  const res = await fetch("/api/reports/export?" + q.toString(), {
+    headers: token() ? { Authorization: "Bearer " + token() } : {},
+  });
+  if (res.ok) downloadBlob(await res.blob(), "Finex_Hisobot.xlsx");
 }
 
 async function pageHisobotlar() {
@@ -1302,6 +1764,7 @@ async function loadHisobotlar() {
     return;
   }
   window.__hisRows = data.rows || [];
+  window.__hisData = data;
   document.getElementById("his-kpis").innerHTML = `
     <div class="card kpi-card his-in"><div class="kpi-head"><span>Aqlli Kirim</span></div><b>${money(data.kirim)}</b><p class="muted">Tovar xarid / inflou</p></div>
     <div class="card kpi-card his-out"><div class="kpi-head"><span>Aqlli Chiqim</span></div><b>${money(data.chiqim)}</b><p class="muted">Savdo + xarajat</p></div>
@@ -1451,6 +1914,12 @@ function bindApp(page) {
         if (err) err.textContent = ex.message;
       }
     };
+    document.querySelectorAll("[data-cennik]").forEach((btn) => {
+      btn.onclick = () => {
+        const p = (window.__products || []).find((x) => x.id === Number(btn.dataset.cennik));
+        if (p) openCennikModal(p);
+      };
+    });
     document.querySelectorAll("[data-edit]").forEach((btn) => {
       btn.onclick = () => {
         const p = JSON.parse(btn.dataset.edit);

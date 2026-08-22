@@ -1,9 +1,11 @@
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .db import get_db
 from .deps import current_store, get_current_user, require_perm
-from .models import CashTxn, Company, Customer, Expense, Store, User
+from .models import CashTxn, Company, Customer, Expense, Store, User, next_account_no
 from .schemas import CustomerIn, DebtPayIn, ExpenseIn, SettingsIn
 
 router = APIRouter(prefix="/api", tags=["more"])
@@ -164,3 +166,35 @@ def patch_settings(
         store.phone = body.store_phone
     db.commit()
     return get_settings(user, db)
+
+
+@router.get("/billing")
+def get_billing(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    company = db.get(Company, user.company_id)
+    if company and not company.account_no:
+        company.account_no = next_account_no(db)
+        db.commit()
+    plan = ((company.plan if company else "FREE") or "FREE").upper()
+    prices = {"FREE": 0, "PRO": 80000, "ENTERPRISE": 160000, "VIP": 500000}
+    price = prices.get(plan, 0)
+    months = ["Yanvar","Fevral","Mart","Aprel","May","Iyun","Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr"]
+    now = datetime.utcnow()
+    expires = (now + timedelta(days=30)).date().isoformat()
+    payments = []
+    if price:
+        payments.append({
+            "n": 1,
+            "at": "",
+            "period": f"{months[now.month - 1]} {now.year}",
+            "amount": price,
+            "method": "",
+            "status": "unpaid",
+        })
+    return {
+        "account_id": (company.account_no if company and company.account_no else next_account_no(db)),
+        "balance": 0.0,
+        "plan": plan,
+        "status": "ACTIVE",
+        "expires_at": expires,
+        "payments": payments,
+    }

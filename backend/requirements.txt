@@ -4,3 +4,4 @@ sqlalchemy
 pydantic-settings
 python-jose[cryptography]
 python-multipart
+openpyxl
