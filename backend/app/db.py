@@ -22,10 +22,30 @@ def ensure_schema():
         ("companies", "address", "VARCHAR(300) DEFAULT ''"),
         ("companies", "inn", "VARCHAR(32) DEFAULT ''"),
         ("companies", "account_no", "INTEGER"),
+        ("companies", "status", "VARCHAR(32) DEFAULT 'TRIAL'"),
+        ("companies", "trial_ends_at", "DATETIME"),
+        ("companies", "paid_until", "DATETIME"),
+        ("companies", "currency", "VARCHAR(8) DEFAULT 'UZS'"),
+        ("companies", "vat_percent", "FLOAT DEFAULT 0"),
+        ("companies", "locale", "VARCHAR(8) DEFAULT 'uz'"),
+        ("companies", "timezone", "VARCHAR(64) DEFAULT 'Asia/Tashkent'"),
+        ("companies", "country", "VARCHAR(8) DEFAULT 'UZ'"),
+        ("companies", "notes", "TEXT DEFAULT ''"),
         ("stores", "phone", "VARCHAR(80) DEFAULT ''"),
+        ("stores", "is_active", "BOOLEAN DEFAULT 1"),
         ("sales", "customer_id", "INTEGER"),
         ("sales", "on_credit", "FLOAT DEFAULT 0"),
+        ("sales", "tax_total", "FLOAT DEFAULT 0"),
+        ("sales", "shift_id", "INTEGER"),
+        ("sales", "idempotency_key", "VARCHAR(64)"),
         ("sale_items", "buy_price", "FLOAT"),
+        ("sale_items", "tax", "FLOAT DEFAULT 0"),
+        ("sale_items", "returned_qty", "FLOAT DEFAULT 0"),
+        ("products", "vat_rate", "FLOAT"),
+        ("customers", "email", "VARCHAR(160) DEFAULT ''"),
+        ("customers", "credit_limit", "FLOAT DEFAULT 0"),
+        ("customers", "is_active", "BOOLEAN DEFAULT 1"),
+        ("stock_ins", "supplier_id", "INTEGER"),
     ]
     with engine.begin() as conn:
         for table, col, typ in extras:
@@ -48,6 +68,17 @@ def ensure_schema():
             for (cid,) in missing:
                 n += 1
                 conn.execute(text("UPDATE companies SET account_no = :n WHERE id = :id"), {"n": n, "id": cid})
+        conn.execute(
+            text(
+                "UPDATE companies SET trial_ends_at = datetime(created_at, '+30 days') "
+                "WHERE trial_ends_at IS NULL"
+            )
+        )
+        conn.execute(
+            text("UPDATE companies SET status = 'TRIAL' WHERE status IS NULL OR status = ''")
+        )
+        conn.execute(text("UPDATE stores SET is_active = 1 WHERE is_active IS NULL"))
+        conn.execute(text("UPDATE customers SET is_active = 1 WHERE is_active IS NULL"))
 
 
 def get_db():

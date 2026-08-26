@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .deps import current_store, require_perm
+from .ledger import move_stock
 from .models import Category, Product, User
 from .schemas import CategoryIn, ProductIn, ProductOut
 
@@ -23,6 +24,7 @@ def product_out(p: Product) -> ProductOut:
         stock=p.stock,
         min_stock=p.min_stock,
         manufacturer=p.manufacturer or "",
+        vat_rate=getattr(p, "vat_rate", None),
         is_active=p.is_active,
     )
 
@@ -71,8 +73,26 @@ def create_product(
     db: Session = Depends(get_db),
 ):
     store = current_store(user, db)
-    p = Product(company_id=user.company_id, store_id=store.id, **body.model_dump())
+    if body.barcode.strip():
+        dup = (
+            db.query(Product)
+            .filter(
+                Product.company_id == user.company_id,
+                Product.store_id == store.id,
+                Product.barcode == body.barcode.strip(),
+            )
+            .first()
+        )
+        if dup:
+            raise HTTPException(409, "Bu barcode allaqachon bor")
+    opening = float(body.stock or 0)
+    data = body.model_dump()
+    data["stock"] = 0
+    p = Product(company_id=user.company_id, store_id=store.id, **data)
     db.add(p)
+    db.flush()
+    if opening:
+        move_stock(db, p, opening, user=user, store_id=store.id, kind="OPENING", ref_type="product", ref_id=p.id)
     db.commit()
     db.refresh(p)
     return product_out(p)

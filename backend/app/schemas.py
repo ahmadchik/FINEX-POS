@@ -29,6 +29,14 @@ class UserOut(BaseModel):
     plan: str
     account_no: Optional[int] = None
     permissions: list[str]
+    currency: str = "UZS"
+    locale: str = "uz"
+    vat_percent: float = 0
+    company_status: str = "TRIAL"
+    trial_ends_at: Optional[str] = None
+    paid_until: Optional[str] = None
+    writable: bool = True
+    stores: list[dict] = []
 
 
 class TokenOut(BaseModel):
@@ -47,6 +55,7 @@ class ProductIn(BaseModel):
     stock: float = 0
     min_stock: float = 0
     manufacturer: str = ""
+    vat_rate: Optional[float] = None
     is_active: bool = True
 
     @model_validator(mode="after")
@@ -69,6 +78,7 @@ class ProductOut(BaseModel):
     stock: float
     min_stock: float
     manufacturer: str
+    vat_rate: Optional[float] = None
     is_active: bool
 
 
@@ -103,12 +113,66 @@ class SaleCreate(BaseModel):
     payment_type: str = "CASH"
     customer_id: Optional[int] = None
     allow_credit: bool = False
+    idempotency_key: Optional[str] = None
+
+
+class ReturnItemIn(BaseModel):
+    id: int
+    qty: float
+
+
+class ReturnIn(BaseModel):
+    items: list[ReturnItemIn] = []
+
+
+class StoreIn(BaseModel):
+    name: str = Field(min_length=1)
+    address: str = ""
+    phone: str = ""
+
+
+class SupplierIn(BaseModel):
+    name: str = Field(min_length=1)
+    phone: str = ""
+    note: str = ""
+
+
+class TransferItemIn(BaseModel):
+    product_id: int
+    qty: float
+
+
+class TransferCreate(BaseModel):
+    from_store_id: int
+    to_store_id: int
+    note: str = ""
+    items: list[TransferItemIn]
+
+
+class CustomerPatch(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    note: Optional[str] = None
+    credit_limit: Optional[float] = None
+
+
+class ShiftOpenIn(BaseModel):
+    opening_cash: float = 0
+    note: str = ""
+
+
+class ShiftCloseIn(BaseModel):
+    closing_cash: float = 0
+    note: str = ""
 
 
 class CustomerIn(BaseModel):
     name: str = Field(min_length=1)
     phone: str = Field(min_length=1)
+    email: str = ""
     note: str = ""
+    credit_limit: float = 0
 
     @field_validator("phone")
     @classmethod
@@ -156,6 +220,9 @@ class SettingsIn(BaseModel):
     store_name: Optional[str] = None
     store_address: Optional[str] = None
     store_phone: Optional[str] = None
+    currency: Optional[str] = None
+    vat_percent: Optional[float] = None
+    locale: Optional[str] = None
 
     @field_validator("inn")
     @classmethod
@@ -177,6 +244,7 @@ class StaffIn(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=4)
     role: str = "CASHIER"
+    store_id: Optional[int] = None
 
 
 class StaffPatch(BaseModel):
@@ -184,3 +252,4 @@ class StaffPatch(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
     role: Optional[str] = None
+    store_id: Optional[int] = None

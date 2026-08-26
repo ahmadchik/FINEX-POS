@@ -12,6 +12,14 @@ FINEX оиласи:
 
 Кейинги босқичлар: кўп дўкон, offline-sync, Click/Payme, Telegram, AI.
 
+## SaaS (ҳозир)
+
+- Тариф: FREE 30 кун синов, PRO / ENTERPRISE / VIP лимитлари (дўкон ва user).
+- Billing checkout: Click/Payme URL ёки **Demo to‘lov** (Sozlamalar).
+- Кўп дўкон: очиш, алмаштириш, transfer.
+- Мижоз қарз китоби, касса сменаси, қисман қайтариш, QQS, valyuta, uz/ru/en.
+- Platform admin: http://127.0.0.1:8001/#/platform (`platform` / `platform123` — `.env` да ўзгартиринг).
+
 ## Ишга тушириш
 
 ```bash

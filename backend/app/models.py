@@ -13,10 +13,19 @@ class Company(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     plan: Mapped[str] = mapped_column(String(32), default="FREE")
+    status: Mapped[str] = mapped_column(String(32), default="TRIAL")
     phone: Mapped[str] = mapped_column(String(80), default="")
     address: Mapped[str] = mapped_column(String(300), default="")
     inn: Mapped[str] = mapped_column(String(32), default="")
     account_no: Mapped[Optional[int]] = mapped_column(Integer, unique=True, index=True, nullable=True)
+    trial_ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    paid_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="UZS")
+    vat_percent: Mapped[float] = mapped_column(Float, default=0)
+    locale: Mapped[str] = mapped_column(String(8), default="uz")
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Tashkent")
+    country: Mapped[str] = mapped_column(String(8), default="UZ")
+    notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="company")
@@ -31,6 +40,7 @@ class Store(Base):
     name: Mapped[str] = mapped_column(String(200))
     address: Mapped[str] = mapped_column(String(300), default="")
     phone: Mapped[str] = mapped_column(String(80), default="")
+    is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     company: Mapped[Company] = relationship(back_populates="stores")
@@ -77,6 +87,7 @@ class Product(Base):
     stock: Mapped[float] = mapped_column(Float, default=0)
     min_stock: Mapped[float] = mapped_column(Float, default=0)
     manufacturer: Mapped[str] = mapped_column(String(200), default="")
+    vat_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -89,6 +100,7 @@ class StockIn(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
+    supplier_id: Mapped[Optional[int]] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
     number: Mapped[str] = mapped_column(String(40))
     supplier: Mapped[str] = mapped_column(String(200), default="")
     total: Mapped[float] = mapped_column(Float, default=0)
@@ -130,6 +142,9 @@ class Sale(Base):
     status: Mapped[str] = mapped_column(String(32), default="PAID")
     customer_id: Mapped[Optional[int]] = mapped_column(ForeignKey("customers.id"), nullable=True)
     on_credit: Mapped[float] = mapped_column(Float, default=0)
+    tax_total: Mapped[float] = mapped_column(Float, default=0)
+    shift_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cash_shifts.id"), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     items: Mapped[list["SaleItem"]] = relationship(back_populates="sale", cascade="all, delete-orphan")
@@ -144,8 +159,11 @@ class Customer(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     phone: Mapped[str] = mapped_column(String(80), default="")
+    email: Mapped[str] = mapped_column(String(160), default="")
     note: Mapped[str] = mapped_column(String(300), default="")
     debt: Mapped[float] = mapped_column(Float, default=0)
+    credit_limit: Mapped[float] = mapped_column(Float, default=0)
+    is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
@@ -172,6 +190,8 @@ class SaleItem(Base):
     price: Mapped[float] = mapped_column(Float)
     buy_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     line_total: Mapped[float] = mapped_column(Float)
+    tax: Mapped[float] = mapped_column(Float, default=0)
+    returned_qty: Mapped[float] = mapped_column(Float, default=0)
 
     sale: Mapped[Sale] = relationship(back_populates="items")
     product: Mapped[Product] = relationship()
@@ -187,6 +207,120 @@ class CashTxn(Base):
     amount: Mapped[float] = mapped_column(Float)
     note: Mapped[str] = mapped_column(String(300), default="")
     sale_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sales.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    phone: Mapped[str] = mapped_column(String(80), default="")
+    note: Mapped[str] = mapped_column(String(300), default="")
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class StockMovement(Base):
+    __tablename__ = "stock_movements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    qty: Mapped[float] = mapped_column(Float)
+    balance_after: Mapped[float] = mapped_column(Float, default=0)
+    kind: Mapped[str] = mapped_column(String(32))  # OPENING, IN, SALE, RETURN, TRANSFER_OUT, TRANSFER_IN, ADJUST
+    ref_type: Mapped[str] = mapped_column(String(32), default="")
+    ref_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class StockTransfer(Base):
+    __tablename__ = "stock_transfers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    from_store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"))
+    to_store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"))
+    number: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(32), default="DONE")
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    items: Mapped[list["StockTransferItem"]] = relationship(back_populates="transfer", cascade="all, delete-orphan")
+
+
+class StockTransferItem(Base):
+    __tablename__ = "stock_transfer_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    transfer_id: Mapped[int] = mapped_column(ForeignKey("stock_transfers.id"))
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    dest_product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id"), nullable=True)
+    qty: Mapped[float] = mapped_column(Float)
+
+    transfer: Mapped[StockTransfer] = relationship(back_populates="items")
+
+
+class CustomerLedger(Base):
+    __tablename__ = "customer_ledger"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    sale_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sales.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(32))  # SALE, PAY, ADJUST, RETURN
+    amount: Mapped[float] = mapped_column(Float)  # + debt up, - debt down
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class CashShift(Base):
+    __tablename__ = "cash_shifts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    opening_cash: Mapped[float] = mapped_column(Float, default=0)
+    closing_cash: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    expected_cash: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="OPEN")
+    note: Mapped[str] = mapped_column(String(300), default="")
+    opened_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class BillingPayment(Base):
+    __tablename__ = "billing_payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    amount: Mapped[float] = mapped_column(Float)
+    plan: Mapped[str] = mapped_column(String(32))
+    method: Mapped[str] = mapped_column(String(32), default="")
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    provider_ref: Mapped[str] = mapped_column(String(120), default="")
+    period: Mapped[str] = mapped_column(String(40), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(80))
+    entity: Mapped[str] = mapped_column(String(80), default="")
+    entity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    payload: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

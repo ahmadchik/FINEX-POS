@@ -1,0 +1,9 @@
+{
+  "name": "FINEX POS",
+  "short_name": "FINEX",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e17",
+  "theme_color": "#d4af37",
+  "icons": [{ "src": "/assets/brand/finex-mark.png", "sizes": "192x192", "type": "image/png" }]
+}

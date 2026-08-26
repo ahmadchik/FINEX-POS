@@ -1,5 +1,15 @@
+import { bindSaas, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t } from "./saas.js?v=plat3";
+
 const root = document.getElementById("root");
-const money = (n) => `${Number(n || 0).toLocaleString("uz-UZ")} so'm`;
+function money(n) {
+  const cur = (user()?.currency || "UZS").toUpperCase();
+  const v = Number(n || 0);
+  if (cur === "USD") return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v);
+  if (cur === "EUR") return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(v);
+  if (cur === "RUB") return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB" }).format(v);
+  if (cur === "KZT") return new Intl.NumberFormat("kk-KZ", { style: "currency", currency: "KZT" }).format(v);
+  return `${v.toLocaleString("uz-UZ")} so'm`;
+}
 const EMPTY_STOCK_MSG = "Маҳсулотлар қўшилмаган";
 const fmtDate = (iso) => {
   if (!iso) return "—";
@@ -26,9 +36,11 @@ function user() {
   }
 }
 function logout() {
+  const imp = localStorage.getItem("finup_impersonating");
   localStorage.removeItem("finup_pos_token");
   localStorage.removeItem("finup_pos_user");
-  location.hash = "#/";
+  localStorage.removeItem("finup_impersonating");
+  location.hash = imp ? "#/platform" : "#/";
   render();
 }
 
@@ -42,6 +54,9 @@ async function api(path, opts = {}) {
     },
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 402) {
+    if (!location.hash.includes("/settings")) location.hash = "#/app/settings";
+  }
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : data.message || "Xatolik");
   return data;
 }
@@ -55,6 +70,7 @@ function nav() {
   if (hash.startsWith("#/app")) return "app";
   if (hash.startsWith("#/login")) return "login";
   if (hash.startsWith("#/register")) return "register";
+  if (hash.startsWith("#/platform")) return "platform";
   return "home";
 }
 
@@ -68,6 +84,7 @@ function landing() {
           <a href="#pricing">Tariflar</a>
           <a href="#help">Yordam</a>
           <a href="#contact">Aloqa</a>
+          <a href="#/platform">Platform</a>
           <a class="btn btn-ghost btn-sm" href="#/login">Kirish</a>
           <a class="btn btn-gold btn-sm" href="#/register">Bepul boshlash</a>
         </div>
@@ -75,7 +92,7 @@ function landing() {
       <div class="hero">
         <div class="kicker">Do‘kon egasi uchun SaaS</div>
         <h1>Savdo, ombor va kassa — bitta kabinetda</h1>
-        <p class="sub">Kichik va o‘rta do‘konlar uchun POS. Barcode, savat, qarz, chek, kirim va hisobot. 30 kun bepul sinab ko‘ring.</p>
+        <p class="sub">Kichik va o‘rta do‘konlar, tarmoqlar uchun POS. Filial, tarif, qarz kitobi, smena, transfer, Click/Payme. 30 kun bepul sinov.</p>
         <div class="row">
           <a class="btn btn-gold" href="#/register">Do‘konni ochish</a>
           <a class="btn btn-ghost" href="#/login">Kabinetga kirish</a>
@@ -111,7 +128,7 @@ function landing() {
               <li><b>3 ta do'kongacha — 160 000 so'm</b><span>80 000 so'm chegirma!</span></li>
               <li><b>5 ta do'kongacha — 300 000 so'm</b><span>100 000 so'm chegirma!</span></li>
             </ul>
-            <p class="muted">Ko'p filialli tizim, cheksiz xodimlar, Click/Payme integratsiyasi.</p>
+            <p class="muted">Ko'p filial, xodim limiti, Click/Payme checkout, transfer.</p>
           </article>
           <article class="card plan">
             <div class="plan-name">VIP</div>
@@ -134,7 +151,7 @@ function landing() {
         <div class="card">
           <b>FINEX</b>
           <p class="muted">Savol yoki demo uchun: pos@finex.uz · Telegram: @finex_pos</p>
-          <p class="muted">Hozircha to‘lov tizimlari (Click/Payme) ulanmagan — tarif keyinroq yoqiladi.</p>
+          <p class="muted">Click/Payme checkout ulangan. Merchant kalit bo‘lmasa demo-to‘lov ishlaydi. Platform: #/platform</p>
         </div>
       </div>
     </div>`;
@@ -159,7 +176,7 @@ function authForm(kind) {
         <button class="btn btn-gold" type="submit">${kind === "login" ? "Kirish" : "Ro‘yxatdan o‘tish"}</button>
         <div class="err" id="auth-err"></div>
       </form>
-      <p class="muted">${kind === "login" ? '<a href="#/register">Yangi do‘kon</a>' : '<a href="#/login">Akkountingiz bormi?</a>'} · <a href="#/">Bosh sahifa</a></p>
+      <p class="muted">${kind === "login" ? '<a href="#/register">Yangi do‘kon</a>' : '<a href="#/login">Akkountingiz bormi?</a>'} · <a href="#/">Bosh sahifa</a> · <a href="#/platform">Platform</a></p>
     </div>`;
 }
 
@@ -167,30 +184,47 @@ function shell(inner) {
   const u = user();
   const page = (location.hash.split("/")[2] || "dashboard").split("?")[0];
   const items = [
-    ["dashboard", "Dashboard", "reports"],
-    ["hisobotlar", "Hisobotlar", "reports"],
-    ["pos", "POS savdo", "pos"],
-    ["products", "Tovarlar", "products"],
-    ["stock", "Kirim", "stock"],
-    ["sales", "Cheklar", "pos"],
-    ["customers", "Mijozlar", "customers"],
-    ["cash", "Kassa", "cash"],
-    ["expenses", "Xarajatlar", "cash"],
-    ["staff", "Xodimlar", "staff"],
-    ["settings", "Sozlamalar", "settings"],
+    ["dashboard", t("dashboard"), "reports"],
+    ["hisobotlar", t("reports"), "reports"],
+    ["pos", t("pos"), "pos"],
+    ["products", t("products"), "products"],
+    ["stock", t("stock"), "stock"],
+    ["transfers", t("transfers"), "stock"],
+    ["sales", t("sales"), "pos"],
+    ["customers", t("customers"), "customers"],
+    ["cash", t("cash"), "cash"],
+    ["expenses", t("expenses"), "cash"],
+    ["suppliers", t("suppliers"), "suppliers"],
+    ["stores", t("stores"), "stores"],
+    ["staff", t("staff"), "staff"],
+    ["settings", t("settings"), "settings"],
   ].filter((i) => !i[2] || can(i[2]));
+  const stores = u.stores || [];
+  const storeSel =
+    stores.length > 1
+      ? `<select class="field" id="store-switch" style="margin:8px 0">${stores
+          .map((s) => `<option value="${s.id}" ${s.id === u.store_id ? "selected" : ""}>${esc(s.name)}</option>`)
+          .join("")}</select>`
+      : "";
+  const warn = u.writable === false ? `<p class="err">Obuna tugagan — savdo yopiq. Billingni to‘lang.</p>` : "";
   return `
+    ${localStorage.getItem("finup_impersonating") ? `<div class="impersonate-bar">Platform impersonate: ${esc(u.company_name)} · ${esc(u.username || u.full_name || "")} <button type="button" class="btn btn-sm" id="imp-exit">Platformga qaytish</button></div>` : ""}
     <div class="app">
       <aside class="side">
-        <div class="kicker brand-kicker"><img class="brand-mark" src="/assets/brand/finex-mark.png" alt="" />FINEX POS</div>
-        <p><b>${esc(u.company_name)}</b><br/><span class="muted">${esc(u.store_name || "")} · ${esc(u.role)}</span></p>
+        <div class="kicker brand-kicker side-brand"><img class="brand-mark" src="/assets/brand/finex-mark.png" alt="FINEX" />FINEX POS</div>
+        <p><b>${esc(u.company_name)}</b><br/><span class="muted">${esc(u.store_name || "")} · ${esc(u.role)} · ${esc(u.plan)}</span></p>
+        ${storeSel}
+        <div class="row" style="margin:8px 0;gap:4px">
+          ${["uz", "ru", "en"].map((l) => `<button type="button" class="btn btn-ghost btn-sm ${lang() === l ? "active" : ""}" data-lang="${l}">${l.toUpperCase()}</button>`).join("")}
+        </div>
+        ${warn}
         ${items
           .map(
             ([id, label]) =>
               `<button class="link ${page === id ? "active" : ""}" data-go="#/app/${id}">${label}</button>`,
           )
           .join("")}
-        <button class="link" id="logout">Chiqish</button>
+        <button class="link" id="logout">${t("logout")}</button>
       </aside>
       <section class="main">${inner}</section>
     </div>
@@ -585,13 +619,20 @@ function drawStockLines() {
 }
 
 async function pagePos() {
-  const [products, customers] = await Promise.all([
+  const [products, customers, shift] = await Promise.all([
     api("/api/pos/products"),
     can("customers") ? api("/api/customers") : Promise.resolve([]),
+    can("cash") ? api("/api/shifts/current").catch(() => ({ open: false })) : Promise.resolve({ open: false }),
   ]);
   window.__pos = { products, customers, cart: [] };
+  const shiftBar = can("cash")
+    ? `<div class="card" style="margin-bottom:12px">
+        ${shift.open ? `<span class="ok">Smena ochiq</span> <button class="btn btn-ghost btn-sm" id="shift-close">${t("shiftClose")}</button>` : `<span class="err">Smena yopiq</span> <input class="field" id="shift-open-cash" type="number" placeholder="Naqd ochilish" style="max-width:160px;display:inline-block" /> <button class="btn btn-gold btn-sm" id="shift-open">${t("shiftOpen")}</button>`}
+      </div>`
+    : "";
   return `
     <h2>POS — savdo oynasi</h2>
+    ${shiftBar}
     <div class="pos">
       <div class="card pos-search">
         <input class="field" id="scan" placeholder="Qidirish / barcode..." autofocus autocomplete="off" />
@@ -748,6 +789,7 @@ function showReceipt(sale) {
 
 function saleStatusLabel(status) {
   if (status === "RETURNED") return "Qaytarilgan";
+  if (status === "PARTIAL") return "Qisman qaytarilgan";
   if (status === "PAID") return "To‘langan";
   return status || "";
 }
@@ -868,10 +910,18 @@ async function openSaleModal(id) {
       <h3>${esc(sale.number)}</h3>
       <p class="muted">${saleWhen(sale.created_at)} · ${esc(sale.cashier)} · ${esc(saleStatusLabel(sale.status))}</p>
       <table class="table">
-        <tr><th>Tovar</th><th>Soni</th><th>Narx</th><th>Jami</th></tr>
-        ${(sale.items || []).map((i) => `<tr><td>${esc(i.name)}</td><td>${i.qty}</td><td>${money(i.price)}</td><td>${money(i.line_total)}</td></tr>`).join("")}
+        <tr><th>Tovar</th><th>Soni</th><th>Qaytarilgan</th><th>Narx</th><th>Jami</th><th></th></tr>
+        ${(sale.items || []).map((i) => {
+          const remain = Number(i.qty || 0) - Number(i.returned_qty || 0);
+          return `<tr>
+            <td>${esc(i.name)}</td><td>${i.qty}</td><td>${i.returned_qty || 0}</td>
+            <td>${money(i.price)}</td><td>${money(i.line_total)}</td>
+            <td>${canReturn && remain > 0 ? `<input class="field" data-rq="${i.id}" type="number" min="0" max="${remain}" step="0.001" placeholder="0" style="width:80px" />` : ""}</td>
+          </tr>`;
+        }).join("")}
       </table>
       ${sale.discount ? `<p class="muted">Chegirma: -${money(sale.discount)}</p>` : ""}
+      ${sale.tax_total ? `<p class="muted">QQS: ${money(sale.tax_total)}</p>` : ""}
       <p><b>Jami: ${money(sale.total)}</b></p>
       <div class="modal-actions">
         ${canReturn ? `<button type="button" class="btn btn-danger" id="sale-refund">Qaytarish</button>` : ""}
@@ -887,19 +937,20 @@ async function openSaleModal(id) {
     if (e.target === modal) close();
   };
   document.getElementById("sale-refund")?.addEventListener("click", async () => {
-    await refundSale(sale.id, sale.number);
+    const items = [...document.querySelectorAll("[data-rq]")].map((el) => ({ id: Number(el.dataset.rq), qty: Number(el.value || 0) })).filter((x) => x.qty > 0);
+    await refundSale(sale.id, sale.number, items);
   });
 }
 
-async function refundSale(id, number) {
+async function refundSale(id, number, items = []) {
   const ok = await askConfirm({
     title: "Qaytarishni tasdiqlang",
-    text: (number || "Chek") + " qaytariladi. Tovar qoldig‘i omborga qaytadi, holat Qaytarilgan bo‘ladi.",
+    text: items.length ? "Tanlangan qatorlar qaytariladi." : (number || "Chek") + " to‘liq qaytariladi.",
     okLabel: "Qaytarish",
     cancelLabel: "Bekor qilish",
   });
   if (!ok) return;
-  await api("/api/sales/" + id + "/return", { method: "POST" });
+  await api("/api/sales/" + id + "/return", { method: "POST", body: JSON.stringify({ items }) });
   document.getElementById("sale-modal")?.classList.add("hidden");
   await loadSales();
 }
@@ -987,6 +1038,8 @@ async function pageCustomers() {
             <td>${esc(c.phone)}</td>
             <td class="${debt > 0 ? "stock-low" : ""}">${money(c.debt)}</td>
             <td>
+              <button type="button" class="btn btn-ghost btn-sm" data-chistory="${c.id}">Tarix</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-cedit='${esc(JSON.stringify(c))}'>Tahrir</button>
               <button type="button" class="btn btn-ghost btn-sm" data-pay="${c.id}" data-name="${esc(c.name)}" data-max="${debt}" ${debt > 0 ? "" : "disabled"}>Qarz uzish</button>
             </td>
           </tr>`;
@@ -1313,7 +1366,7 @@ function renderBilling(b) {
             <div class="kicker">Billing</div>
             <h3>Shaxsiy hisob va Tariflar</h3>
           </div>
-          <span class="bill-status ${active ? "on" : "off"}">${active ? "AKTIV" : "NOFAOL"}</span>
+          <span class="bill-status ${active ? "on" : "off"}">${esc(b.status || (active ? "AKTIV" : "NOFAOL"))}</span>
         </div>
         <div class="bill-kpis">
           <div class="bill-kpi">
@@ -1333,7 +1386,20 @@ function renderBilling(b) {
             <b>${active ? "AKTIV" : "NOFAOL"} — ${esc(fmtDay(b.expires_at))} gacha</b>
           </div>
         </div>
-        <p class="bill-hint">Hisobni to‘ldirish uchun Click yoki Payme ilovasidan <b>FINEX POS</b> ni qidiring va yuqoridagi ID raqamingizni kiriting.</p>
+        <p class="bill-hint">
+          Holat: <b>${esc(b.status || "")}</b>
+          ${b.usage ? ` · Do‘kon ${b.usage.stores}/${b.limits?.stores} · User ${b.usage.users}/${b.limits?.users}` : ""}
+        </p>
+        <div class="row" id="bill-checkout">
+          <select class="field" id="bill-plan" style="max-width:160px">
+            <option value="PRO">PRO</option>
+            <option value="ENTERPRISE">ENTERPRISE</option>
+            <option value="VIP">VIP</option>
+          </select>
+          <button type="button" class="btn btn-gold" data-paym="click">Click</button>
+          <button type="button" class="btn btn-gold" data-paym="payme">Payme</button>
+          <button type="button" class="btn btn-ghost" data-paym="demo">Demo to‘lov</button>
+        </div>
       </div>
       <div class="card bill-table-card">
         <div class="bill-table-head"><b>To‘lovlar tarixi</b></div>
@@ -1394,6 +1460,19 @@ async function pageSettings() {
         </label>
         <label class="set-field set-span-2">Do‘kon nomi
           <input class="field" name="store_name" placeholder="Do‘kon nomi" value="${v("store_name")}" />
+        </label>
+        <label class="set-field">Valyuta
+          <select class="field" name="currency">
+            ${["UZS", "USD", "EUR", "RUB", "KZT"].map((c) => `<option ${init.currency === c ? "selected" : ""}>${c}</option>`).join("")}
+          </select>
+        </label>
+        <label class="set-field">QQS %
+          <input class="field" name="vat_percent" type="number" step="0.01" value="${esc(init.vat_percent || 0)}" />
+        </label>
+        <label class="set-field">Til
+          <select class="field" name="locale">
+            ${["uz", "ru", "en"].map((c) => `<option ${init.locale === c ? "selected" : ""}>${c}</option>`).join("")}
+          </select>
         </label>
         <div class="set-span-2">
           <button class="btn btn-gold" type="submit">Saqlash</button>
@@ -1848,6 +1927,9 @@ async function renderApp() {
     expenses: pageExpenses,
     staff: pageStaff,
     settings: pageSettings,
+    stores: () => pageStores(api, money),
+    suppliers: () => pageSuppliers(api),
+    transfers: () => pageTransfers(api),
   };
   const fn = loaders[page] || (can("reports") ? pageDashboard : pagePos);
   try {
@@ -1855,18 +1937,32 @@ async function renderApp() {
     const html = await fn();
     root.innerHTML = shell(html);
     bindApp(page);
+    bindSaas(page, api, setAuth, render);
   } catch (e) {
     root.innerHTML = shell(`<p class="err">${esc(e.message)}</p>`);
     bindApp(page);
+    bindSaas(page, api, setAuth, render);
   }
 }
 
 function bindApp(page) {
+  document.getElementById("imp-exit")?.addEventListener("click", logout);
   document.getElementById("logout")?.addEventListener("click", logout);
   document.querySelectorAll("[data-go]").forEach((el) => {
     el.onclick = () => {
       location.hash = el.dataset.go;
     };
+  });
+  document.querySelectorAll("[data-lang]").forEach((b) => {
+    b.onclick = () => {
+      setLang(b.dataset.lang);
+      render();
+    };
+  });
+  document.getElementById("store-switch")?.addEventListener("change", async (e) => {
+    const data = await api("/api/auth/switch-store", { method: "POST", body: JSON.stringify({ store_id: Number(e.target.value) }) });
+    setAuth(data);
+    render();
   });
 
   const pForm = document.getElementById("p-form");
@@ -2175,6 +2271,29 @@ function bindApp(page) {
         openDebtPayModal(Number(btn.dataset.pay), btn.dataset.name, Number(btn.dataset.max || 0));
       };
     });
+    document.querySelectorAll("[data-chistory]").forEach((btn) => {
+      btn.onclick = async () => {
+        const d = await api("/api/customers/" + btn.dataset.chistory);
+        const modal = document.getElementById("confirm-modal");
+        modal.classList.remove("hidden");
+        modal.innerHTML = `<div class="card confirm-box sale-box">
+          <h3>${esc(d.name)}</h3>
+          <p>Qarz: <b>${money(d.debt)}</b> · Limit: ${money(d.credit_limit)}</p>
+          <table class="table">${(d.ledger || []).map((x) => `<tr><td>${esc(x.kind)}</td><td>${money(x.amount)}</td><td>${esc(x.note)}</td></tr>`).join("")}</table>
+          <button class="btn btn-ghost" id="sale-close">Yopish</button>
+        </div>`;
+        document.getElementById("sale-close").onclick = () => modal.classList.add("hidden");
+      };
+    });
+    document.querySelectorAll("[data-cedit]").forEach((btn) => {
+      btn.onclick = async () => {
+        const c = JSON.parse(btn.dataset.cedit);
+        const name = prompt("Ism", c.name);
+        if (!name) return;
+        await api("/api/customers/" + c.id, { method: "PATCH", body: JSON.stringify({ name, phone: c.phone, credit_limit: c.credit_limit }) });
+        render();
+      };
+    });
   }
 
   const stForm = document.getElementById("st-form");
@@ -2268,12 +2387,26 @@ function bindApp(page) {
         saveLocalSettings(saved);
         const me = await api("/api/auth/me");
         const cur = user();
-        setAuth({ access: token(), user: { ...cur, company_name: me.company_name, store_name: me.store_name } });
+        setAuth({ access: token(), user: { ...cur, company_name: me.company_name, store_name: me.store_name, currency: me.currency, locale: me.locale, vat_percent: me.vat_percent } });
         if (msg) msg.innerHTML = '<p class="ok">Saqlandi (server va localStorage)</p>';
       } catch (ex) {
         if (msg) msg.innerHTML = `<p class="err">${esc(ex.message)}</p>`;
       }
     };
+    document.querySelectorAll("[data-paym]").forEach((b) => {
+      b.onclick = async () => {
+        const plan = document.getElementById("bill-plan")?.value || "PRO";
+        const data = await api("/api/billing/checkout", { method: "POST", body: JSON.stringify({ plan, method: b.dataset.paym === "demo" ? "click" : b.dataset.paym }) });
+        if (b.dataset.paym === "demo" || data.demo) {
+          await api("/api/billing/demo-pay/" + data.payment_id + "/confirm", { method: "POST", body: "{}" });
+          const me = await api("/api/auth/me");
+          setAuth({ access: token(), user: { ...user(), ...me } });
+          render();
+        } else if (data.url) {
+          window.open(data.url, "_blank");
+        }
+      };
+    });
   }
 
   bindSales();
@@ -2329,6 +2462,14 @@ function bindApp(page) {
       drawPos();
     });
     document.getElementById("pay")?.addEventListener("click", payNow);
+    document.getElementById("shift-open")?.addEventListener("click", async () => {
+      await api("/api/shifts/open", { method: "POST", body: JSON.stringify({ opening_cash: Number(document.getElementById("shift-open-cash")?.value || 0) }) });
+      render();
+    });
+    document.getElementById("shift-close")?.addEventListener("click", async () => {
+      await api("/api/shifts/close", { method: "POST", body: JSON.stringify({ closing_cash: 0 }) });
+      render();
+    });
   }
 }
 
@@ -2366,6 +2507,7 @@ async function payNow() {
         payment_type: type,
         customer_id: customerId,
         allow_credit: allowCredit,
+        idempotency_key: "pos-" + Date.now() + "-" + Math.random().toString(16).slice(2),
       }),
     });
     msg.innerHTML = `<p class="ok">${esc(sale.number)} · ${money(sale.total)}</p>`;
@@ -2407,6 +2549,11 @@ async function render() {
         err.textContent = ex.message;
       }
     };
+    return;
+  }
+  if (view === "platform") {
+    root.innerHTML = await pagePlatform(api);
+    bindSaas("platform", api, setAuth, render);
     return;
   }
   await renderApp();

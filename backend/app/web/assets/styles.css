@@ -21,6 +21,26 @@ a { color: var(--gold); text-decoration: none; }
 .kicker { letter-spacing: .18em; text-transform: uppercase; color: var(--gold); font-size: 11px; font-weight: 700; }
 .brand-kicker { display: flex; align-items: center; gap: 8px; letter-spacing: .12em; }
 .brand-mark { width: 28px; height: 28px; border-radius: 8px; object-fit: cover; }
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 8px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 16px;
+  letter-spacing: .08em;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.side-brand .brand-mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px var(--border);
+}
 h1 { font-size: 42px; margin: 10px 0; letter-spacing: .04em; }
 h2 { margin: 6px 0 16px; }
 h3 { margin: 22px 0 10px; }
@@ -424,4 +444,34 @@ select.field.need-customer {
     print-color-adjust: exact;
   }
   .modal-actions { display: none !important; }
+}
+
+.impersonate-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: var(--gold);
+  color: #1a1403;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  grid-column: 1 / -1;
+}
+.app:has(.impersonate-bar) { grid-template-rows: auto 1fr; }
+.plat { max-width: 1180px; margin: 0 auto; padding: 18px 20px 64px; }
+.plat-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.plat-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.plat-kpi { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+.plat-kpi b { display: block; font-size: 20px; color: var(--gold); margin-top: 4px; line-height: 1.25; }
+.plat-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; align-items: center; }
+.plat-st { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); letter-spacing: .04em; }
+.plat-st-TRIAL { color: #93c5fd; border-color: rgba(147,197,253,.35); }
+.plat-st-ACTIVE { color: var(--ok); border-color: rgba(52,211,153,.35); }
+.plat-st-PAST_DUE { color: #fbbf24; border-color: rgba(251,191,36,.35); }
+.plat-st-SUSPENDED { color: var(--danger); border-color: rgba(244,63,94,.35); }
+.plat-detail-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 14px; }
+.plat-login .brand-kicker { margin-bottom: 8px; }
+@media (max-width: 900px) {
+  .plat-toolbar .field { width: 100%; }
 }

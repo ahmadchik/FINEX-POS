@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .deps import current_store, require_perm
-from .models import CashTxn, Expense, Product, Sale, SaleItem, StockIn, StockInItem, User
+from .ledger import move_stock
+from .models import CashTxn, Expense, Product, Sale, SaleItem, StockIn, StockInItem, Store, User
+from .plans import plan_of, refresh_company_status
 from .schemas import CashCreate, StaffIn, StaffPatch, StockInCreate
 from .security import ROLES, hash_password
 
@@ -46,7 +48,7 @@ def create_stock_in(
         product = db.get(Product, row.product_id)
         if not product or product.company_id != user.company_id:
             raise HTTPException(404, "Mahsulot topilmadi")
-        product.stock = round(product.stock + row.qty, 3)
+        move_stock(db, product, row.qty, user=user, store_id=store.id, kind="IN", ref_type="stock_in", ref_id=doc.id)
         if row.buy_price:
             product.buy_price = row.buy_price
         line = row.qty * (row.buy_price or product.buy_price)
@@ -622,7 +624,7 @@ def reports_export(
 def list_staff(user: User = Depends(require_perm("staff")), db: Session = Depends(get_db)):
     rows = db.query(User).filter(User.company_id == user.company_id).order_by(User.id).all()
     return [
-        {"id": u.id, "full_name": u.full_name, "username": u.username, "role": u.role, "is_active": u.is_active}
+        {"id": u.id, "full_name": u.full_name, "username": u.username, "role": u.role, "is_active": u.is_active, "store_id": u.store_id}
         for u in rows
     ]
 
@@ -636,10 +638,23 @@ def create_staff(
     role = body.role.upper()
     if role not in ROLES:
         raise HTTPException(400, "Noto'g'ri rol")
+    from .models import Company
+
+    company = db.get(Company, user.company_id)
+    refresh_company_status(company)
+    spec = plan_of(company.plan if company and company.status == "ACTIVE" else "FREE")
+    active_users = db.query(User).filter(User.company_id == user.company_id, User.is_active.is_(True)).count()
+    if active_users >= spec["users"]:
+        raise HTTPException(402, f"Tarif limiti: {spec['users']} foydalanuvchi")
     username = body.username.strip().lower()
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(409, "Bu login band")
     store = current_store(user, db)
+    if body.store_id:
+        st = db.get(Store, body.store_id)
+        if not st or st.company_id != user.company_id:
+            raise HTTPException(400, "Do'kon noto'g'ri")
+        store = st
     u = User(
         company_id=user.company_id,
         store_id=store.id,
@@ -686,6 +701,11 @@ def update_staff(
         if u.id == user.id:
             raise HTTPException(400, "O'z rolingizni o'zgartira olmaysiz")
         u.role = role
+    if body.store_id:
+        st = db.get(Store, body.store_id)
+        if not st or st.company_id != user.company_id:
+            raise HTTPException(400, "Do'kon noto'g'ri")
+        u.store_id = st.id
     db.commit()
     db.refresh(u)
     return {"id": u.id, "username": u.username, "role": u.role, "full_name": u.full_name}

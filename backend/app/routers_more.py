@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .deps import current_store, get_current_user, require_perm
-from .models import CashTxn, Company, Customer, Expense, Store, User, next_account_no
+from .ledger import customer_ledger
+from .models import CashTxn, Company, Customer, Expense, Store, User
 from .schemas import CustomerIn, DebtPayIn, ExpenseIn, SettingsIn
 
 router = APIRouter(prefix="/api", tags=["more"])
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/api", tags=["more"])
 def list_customers(user: User = Depends(require_perm("customers")), db: Session = Depends(get_db)):
     rows = db.query(Customer).filter(Customer.company_id == user.company_id).order_by(Customer.name).all()
     return [
-        {"id": c.id, "name": c.name, "phone": c.phone, "note": c.note, "debt": c.debt}
+        {"id": c.id, "name": c.name, "phone": c.phone, "email": getattr(c, "email", "") or "", "note": c.note, "debt": c.debt, "credit_limit": getattr(c, "credit_limit", 0) or 0}
         for c in rows
     ]
 
@@ -26,11 +27,18 @@ def create_customer(
     user: User = Depends(require_perm("customers")),
     db: Session = Depends(get_db),
 ):
-    c = Customer(company_id=user.company_id, name=body.name.strip(), phone=body.phone.strip(), note=body.note)
+    c = Customer(
+        company_id=user.company_id,
+        name=body.name.strip(),
+        phone=body.phone.strip(),
+        email=getattr(body, "email", "") or "",
+        note=body.note,
+        credit_limit=getattr(body, "credit_limit", 0) or 0,
+    )
     db.add(c)
     db.commit()
     db.refresh(c)
-    return {"id": c.id, "name": c.name, "phone": c.phone, "debt": c.debt}
+    return {"id": c.id, "name": c.name, "phone": c.phone, "debt": c.debt, "credit_limit": c.credit_limit}
 
 
 @router.post("/customers/{customer_id}/pay-debt")
@@ -46,7 +54,7 @@ def pay_debt(
     if body.amount <= 0 or body.amount > (c.debt or 0) + 0.01:
         raise HTTPException(400, "Summa noto'g'ri")
     store = current_store(user, db)
-    c.debt = round(max(0.0, (c.debt or 0) - body.amount), 2)
+    customer_ledger(db, c, -body.amount, user=user, kind="PAY", note=f"Qarz: {c.name}")
     if body.method.upper() == "CASH":
         db.add(
             CashTxn(
@@ -139,6 +147,11 @@ def get_settings(user: User = Depends(get_current_user), db: Session = Depends(g
         "store_name": store.name,
         "store_address": store.address or "",
         "store_phone": getattr(store, "phone", "") or "",
+        "currency": getattr(company, "currency", "UZS") or "UZS",
+        "vat_percent": float(getattr(company, "vat_percent", 0) or 0),
+        "locale": getattr(company, "locale", "uz") or "uz",
+        "timezone": getattr(company, "timezone", "Asia/Tashkent") or "Asia/Tashkent",
+        "country": getattr(company, "country", "UZ") or "UZ",
     }
 
 
@@ -164,37 +177,11 @@ def patch_settings(
         store.address = body.store_address
     if body.store_phone is not None:
         store.phone = body.store_phone
+    if body.currency:
+        company.currency = body.currency.upper()[:8]
+    if body.vat_percent is not None:
+        company.vat_percent = max(0.0, float(body.vat_percent))
+    if body.locale:
+        company.locale = body.locale[:8]
     db.commit()
     return get_settings(user, db)
-
-
-@router.get("/billing")
-def get_billing(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    company = db.get(Company, user.company_id)
-    if company and not company.account_no:
-        company.account_no = next_account_no(db)
-        db.commit()
-    plan = ((company.plan if company else "FREE") or "FREE").upper()
-    prices = {"FREE": 0, "PRO": 80000, "ENTERPRISE": 160000, "VIP": 500000}
-    price = prices.get(plan, 0)
-    months = ["Yanvar","Fevral","Mart","Aprel","May","Iyun","Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr"]
-    now = datetime.utcnow()
-    expires = (now + timedelta(days=30)).date().isoformat()
-    payments = []
-    if price:
-        payments.append({
-            "n": 1,
-            "at": "",
-            "period": f"{months[now.month - 1]} {now.year}",
-            "amount": price,
-            "method": "",
-            "status": "unpaid",
-        })
-    return {
-        "account_id": (company.account_no if company and company.account_no else next_account_no(db)),
-        "balance": 0.0,
-        "plan": plan,
-        "status": "ACTIVE",
-        "expires_at": expires,
-        "payments": payments,
-    }
