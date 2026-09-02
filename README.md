@@ -36,3 +36,8 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ## Demo
 
 Рўйхатдан ўтинг — биринчи дўкон ва намуна товарлар автоматик яратилади.
+
+
+## AI Assistant
+
+Kabinet ichida o'ng pastki **AI** tugmasi. Backend: /api/ai/*. Kalit .env da (AI_API_KEY). Batafsil: [docs/AI_ASSISTANT.md](docs/AI_ASSISTANT.md).

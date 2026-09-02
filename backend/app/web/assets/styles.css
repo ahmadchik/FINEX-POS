@@ -475,3 +475,81 @@ select.field.need-customer {
 @media (max-width: 900px) {
   .plat-toolbar .field { width: 100%; }
 }
+
+
+/* FINEX AI Assistant */
+.ai-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 50;
+  width: 52px;
+  height: 52px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--gold);
+  color: #1a1403;
+  font-weight: 800;
+  letter-spacing: .06em;
+  cursor: pointer;
+}
+.ai-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 84px;
+  z-index: 50;
+  width: min(400px, calc(100vw - 24px));
+  height: min(520px, calc(100vh - 120px));
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ai-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ai-head-actions { display: flex; gap: 6px; }
+.ai-status { padding: 6px 12px; font-size: 12px; }
+.ai-log {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-msg {
+  max-width: 92%;
+  padding: 8px 10px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.ai-msg-user {
+  align-self: flex-end;
+  background: rgba(212,175,55,.16);
+  color: var(--text);
+}
+.ai-msg-bot {
+  align-self: flex-start;
+  background: #0d1424;
+  border: 1px solid var(--border);
+}
+.ai-pending { color: var(--muted); font-style: italic; }
+.ai-form { padding: 10px 12px 12px; border-top: 1px solid var(--border); }
+.ai-form-row { display: flex; gap: 8px; margin-top: 8px; }
+.ai-form-row .btn { flex: 1; }
+.ai-err { padding: 0 12px; margin: 0; }
+@media (max-width: 640px) {
+  .ai-panel { right: 12px; left: 12px; width: auto; bottom: 76px; }
+  .ai-fab { right: 12px; bottom: 12px; }
+}

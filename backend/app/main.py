@@ -14,6 +14,7 @@ from .routers_more import router as more_router
 from .routers_ops import router as ops_router
 from .routers_pos import router as pos_router
 from .routers_saas import platform_router, saas_router
+from .routers_ai import router as ai_router
 
 ensure_schema()
 
@@ -37,6 +38,7 @@ app.include_router(ops_router)
 app.include_router(more_router)
 app.include_router(saas_router)
 app.include_router(platform_router)
+app.include_router(ai_router)
 
 
 @app.get("/api/health")

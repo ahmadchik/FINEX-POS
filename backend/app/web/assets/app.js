@@ -1,4 +1,5 @@
-import { bindSaas, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t } from "./saas.js?v=plat3";
+import { bindSaas, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t } from "./saas.js?v=ai1";
+import { rememberApiError, syncFinexAi } from "./ai.js?v=ai1";
 
 const root = document.getElementById("root");
 function money(n) {
@@ -57,7 +58,11 @@ async function api(path, opts = {}) {
   if (res.status === 402) {
     if (!location.hash.includes("/settings")) location.hash = "#/app/settings";
   }
-  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : data.message || "Xatolik");
+  if (!res.ok) {
+    const msg = typeof data.detail === "string" ? data.detail : data.message || "Xatolik";
+    rememberApiError({ path, status: res.status, message: msg });
+    throw new Error(msg);
+  }
   return data;
 }
 
@@ -2559,5 +2564,10 @@ async function render() {
   await renderApp();
 }
 
-window.addEventListener("hashchange", render);
-render();
+const _render = render;
+async function renderAndAi() {
+  await _render();
+  try { syncFinexAi(); } catch (e) { /* AI widget must not break POS */ }
+}
+window.addEventListener("hashchange", renderAndAi);
+renderAndAi();

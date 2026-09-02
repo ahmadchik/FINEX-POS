@@ -23,5 +23,19 @@ class Settings(BaseSettings):
     payme_key: str = ""
     payme_checkout_url: str = "https://checkout.paycom.uz"
 
+    ai_enabled: bool = True
+    ai_provider: str = "openai"
+    ai_api_key: str = ""
+    ai_base_url: str = "https://api.openai.com/v1"
+    ai_model: str = "gpt-4o-mini"
+    ai_max_tokens: int = 800
+    ai_timeout_sec: float = 25
+    ai_max_history: int = 12
+    ai_max_message_chars: int = 2000
+    ai_rate_limit: int = 30
+    ai_rate_window: int = 3600
+    ai_temperature: float = 0.3
+
+
 
 settings = Settings()
