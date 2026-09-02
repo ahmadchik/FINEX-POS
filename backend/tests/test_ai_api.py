@@ -8,8 +8,20 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.deps import get_current_user
+from app.ai.providers.base import ChatResult
+from app.ai.service import set_provider_override
 from app.main import app
 from app.models import Company, User
+
+class _EchoModel:
+    name = "openai"
+    model = "echo"
+    def complete(self, messages, **kwargs):
+        user = next(m["content"] for m in reversed(messages) if m["role"] == "user")
+        kb = next((m["content"] for m in messages if "### " in m.get("content", "")), "")
+        title = kb.split("### ", 1)[1].split("\n", 1)[0] if "### " in kb else "KB"
+        return ChatResult(text=f"{title}: {user}", provider="openai", model="echo", latency_ms=1)
+
 
 
 @pytest.fixture
@@ -65,10 +77,12 @@ def api_env():
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
+    set_provider_override(_EchoModel())
     client = TestClient(app)
     try:
         yield client, current, ids
     finally:
+        set_provider_override(None)
         app.dependency_overrides.clear()
 
 
@@ -91,7 +105,7 @@ def test_user_question_kb_answer(api_env):
     assert r.status_code == 200
     body = r.json()
     assert "Tovarlar" in body["answer"] or "tovar" in body["answer"].lower()
-    assert body["fallback"] is True
+    assert body["fallback"] is False
     assert "api_key" not in body["answer"].lower()
 
 
@@ -102,7 +116,7 @@ def test_page_context(api_env):
         json={"message": "Bu yerda nima qilishim kerak?", "context": {"page": "pos"}},
     )
     assert r.status_code == 200
-    assert "POS" in r.json()["answer"] or "smena" in r.json()["answer"].lower()
+    assert "POS" in r.json()["answer"] or "sotuv" in r.json()["answer"].lower() or "smena" in r.json()["answer"].lower()
     assert r.json()["context_used"]["page"] == "pos"
 
 

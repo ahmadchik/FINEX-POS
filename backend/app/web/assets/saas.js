@@ -1,5 +1,6 @@
-import { bindPlatform } from "./platform.js?v=plat3";
-export { pagePlatform } from "./platform.js?v=plat3";
+import { bindPlatform } from "./platform.js?v=theme2";
+export { pagePlatform, applyPlatformTheme } from "./platform.js?v=theme2";
+export { applyTheme, bindThemeToggle, themeToggleHtml } from "./theme.js?v=theme2";
 export function lang() {
   return localStorage.getItem("finup_lang") || (JSON.parse(localStorage.getItem("finup_pos_user") || "null") || {}).locale || "uz";
 }

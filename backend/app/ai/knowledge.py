@@ -148,6 +148,17 @@ ARTICLES: list[dict] = [
         ),
     },
     {
+        "id": "products-disable",
+        "pages": ["products"],
+        "tags": ["o'chir", "ochir", "disable", "nofaol", "o'chirish", "tahrir"],
+        "title": "Tovarni o'chirish (nofaol)",
+        "body": (
+            "Tovarlar jadvalida qator oxiridagi **O'chirish** — mahsulot o'chirib tashlanmaydi, nofaol bo'ladi "
+            "(qayta **Yoqish** mumkin). POS savatiga nofaol tovar chiqmaydi.\n"
+            "Tahrir: **Tahrir** bosib nom/narx/barcode ni o'zgartiring."
+        ),
+    },
+    {
         "id": "nav-overview",
         "pages": ["dashboard", "home"],
         "tags": ["meny", "qayer", "qanday och", "interfeys", "yordam"],
@@ -185,7 +196,7 @@ _CYR = str.maketrans({
     "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p",
     "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "x", "ц": "s",
     "ъ": "", "ь": "", "э": "e", "ў": "o", "қ": "q", "ғ": "g", "ҳ": "h",
-    "ё": "e", "ю": "yu", "я": "ya", "ч": "c", "ш": "sh",
+    "ё": "e", "ю": "yu", "я": "ya", "ч": "ch", "ш": "sh",
 })
 
 
@@ -195,34 +206,61 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", x)
 
 
-def retrieve(question: str, page: str = "", last_error_message: str = "", limit: int = 4) -> list[dict]:
-    q = _norm(question)
+INTENTS: list[tuple[tuple[str, ...], list[str]]] = [
+    (("sotilmay", "sotilmadi", "savdo oshmad", "nega tovar"), ["pos-sale", "pos-shift", "settings-billing", "stock-in"]),
+    (("qarzga", "qarzga savdo", "kredit savdo"), ["pos-sale", "customers"]),
+    (("shtrix", "barcode", "barkod"), ["products-barcode"]),
+    (("smena yop", "yopaman", "shift close", "smenani yop"), ["pos-shift"]),
+    (("smena och", "kassa och", "ocaman", "ochaman", "shift open"), ["pos-shift"]),
+    (("kassa smena", "smena", "shift"), ["pos-shift"]),
+    (("o'chir", "ochir", "nofaol", "o'chirish"), ["products-disable"]),
+    (("qosh", "qo'sh", "yangi tovar", "tovar qosh"), ["products-add"]),
+    (("kirim", "ombor", "qoldiq"), ["stock-in"]),
+    (("hisobot", "excel"), ["reports"]),
+    (("billing", "obuna", "tarif"), ["settings-billing"]),
+]
+
+
+def retrieve(question: str, page: str = "", last_error_message: str = "", limit: int = 2) -> list[dict]:
+    q = _norm(question + " " + (last_error_message or ""))
     tokens = set(re.findall(r"[a-zA-Z0-9_']+|[\u0400-\u04FF]+", q))
+    by_id = {a["id"]: a for a in ARTICLES}
+    forced: list[str] = []
+    for keys, ids in INTENTS:
+        if any(_norm(k) in q for k in keys):
+            forced.extend(ids)
+            break
     scored: list[tuple[float, dict]] = []
     for art in ARTICLES:
         score = 0.0
-        if page and page in art["pages"]:
-            score += 3.0
+        if forced and art["id"] in forced:
+            score += 8.0
+        elif forced:
+            score -= 4.0
+        if page and page in art["pages"] and not forced:
+            score += 1.2
         title = _norm(art["title"])
         tags = " ".join(art["tags"])
-        if q and q in _norm(art["body"]):
-            score += 2.0
-        for t in art["tags"]:
-            if t in q:
+        for tg in art["tags"]:
+            if _norm(tg) and _norm(tg) in q:
                 score += 2.5
         for tok in tokens:
-            if len(tok) < 3:
+            if len(tok) < 4:
                 continue
-            if tok in title or tok in tags or tok in _norm(art["body"]):
-                score += 0.4
+            if tok in title or tok in _norm(tags) or tok in _norm(art["body"]):
+                score += 0.35
         if score > 0:
             scored.append((score, art))
     scored.sort(key=lambda x: x[0], reverse=True)
-    picked = [a for _, a in scored[:limit]]
-    if not picked and page:
-        picked = [a for a in ARTICLES if page in a["pages"]][:2]
+    picked = [a for _, a in scored[: max(1, min(limit, 2))]]
+    if forced:
+        ordered = []
+        for i in forced:
+            if i in by_id and by_id[i] not in ordered:
+                ordered.append(by_id[i])
+        picked = ordered[: max(1, min(limit, 2))]
     if not picked:
-        picked = [a for a in ARTICLES if a["id"] == "nav-overview"]
+        picked = [by_id["nav-overview"]] if "nav-overview" in by_id else ARTICLES[:1]
     return picked
 
 

@@ -1,3 +1,6 @@
+import { applyTheme, bindThemeToggle, themeToggleHtml } from "./theme.js?v=theme2";
+export { applyTheme as applyPlatformTheme };
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -59,6 +62,7 @@ function loginHtml() {
       <form id="plat-login">
         <input class="field" name="username" value="platform" autocomplete="username" style="margin-bottom:8px" />
         <input class="field" name="password" type="password" placeholder="Parol: platform123" autocomplete="current-password" style="margin-bottom:8px" />
+        <div class="row" style="margin:0 0 10px;gap:8px">${themeToggleHtml()}</div>
         <button class="btn btn-gold" type="submit">Kirish</button>
         <p class="muted" style="margin-top:10px">Standart: <b>platform</b> / <b>platform123</b></p>
         <p class="err" id="plat-err"></p>
@@ -73,6 +77,7 @@ function platShell(inner) {
       <div class="plat-top">
         <div class="kicker brand-kicker"><img class="brand-mark" src="/assets/brand/finex-mark.png" alt="" />Platform</div>
         <div class="row" style="margin:0;gap:8px;align-items:center">
+          ${themeToggleHtml()}
           <a class="muted" href="#/">Sayt</a>
           <button type="button" class="btn btn-ghost btn-sm" id="plat-out">Chiqish</button>
         </div>
@@ -294,6 +299,7 @@ function flashErr(msg) {
 }
 
 export function bindPlatform(_page, api, setAuth, render) {
+  bindThemeToggle();
   const plat = document.getElementById("plat-login");
   if (plat) {
     plat.onsubmit = async (e) => {

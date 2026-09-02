@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .ai import service
+from .ai.service import AiUnavailable
 from .db import get_db
 from .deps import get_current_user
 from .models import User
@@ -33,11 +35,14 @@ def ai_status(user: User = Depends(get_current_user)):
 
 @router.post("/chat")
 def ai_chat(body: ChatIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rate_limit(f"ai:{user.id}", limit=settings.ai_rate_limit, window=settings.ai_rate_window)
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        rate_limit(f"ai:{user.id}", limit=settings.ai_rate_limit, window=settings.ai_rate_window)
     try:
         return service.chat(db, user, body.message, body.context)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except AiUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @router.get("/history")

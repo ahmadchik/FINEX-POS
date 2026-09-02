@@ -108,3 +108,10 @@ Senariylar: savol, KB javob, 401, 422, rol, page context, xato diagnostikasi, hi
 - `AI_MODEL` / limitlarni belgilash
 - HTTPS orqasida API
 - Platform parolini default dan almashtirish
+
+
+## Model vs Knowledge Base (2026-09)
+
+AI_API_KEY bo'sh bo'lsa chat **503** qaytaradi — KB ni tayyor javob qilib yubormaydi.
+KB `retrieve()` orqali 1–2 maqola kontekst sifatida modelga ketadi.
+Fallback dump o'chirilgan.

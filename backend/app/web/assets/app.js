@@ -1,4 +1,4 @@
-import { bindSaas, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t } from "./saas.js?v=ai1";
+import { applyTheme, bindSaas, bindThemeToggle, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t, themeToggleHtml } from "./saas.js?v=theme2";
 import { rememberApiError, syncFinexAi } from "./ai.js?v=ai1";
 
 const root = document.getElementById("root");
@@ -90,6 +90,7 @@ function landing() {
           <a href="#help">Yordam</a>
           <a href="#contact">Aloqa</a>
           <a href="#/platform">Platform</a>
+          ${themeToggleHtml()}
           <a class="btn btn-ghost btn-sm" href="#/login">Kirish</a>
           <a class="btn btn-gold btn-sm" href="#/register">Bepul boshlash</a>
         </div>
@@ -166,7 +167,7 @@ function authForm(kind) {
   const title = kind === "login" ? "Kirish" : "Do‘konni ochish";
   return `
     <div class="auth card">
-      <div class="kicker brand-kicker"><img class="brand-mark" src="/assets/brand/finex-mark.png" alt="" />FINEX POS</div>
+      <div class="kicker brand-kicker" style="justify-content:space-between;width:100%"><span class="brand-kicker" style="margin:0"><img class="brand-mark" src="/assets/brand/finex-mark.png" alt="" />FINEX POS</span>${themeToggleHtml()}</div>
       <h2>${title}</h2>
       <form id="auth-form" class="grid3" style="grid-template-columns:1fr;margin-top:12px">
         ${
@@ -221,6 +222,7 @@ function shell(inner) {
         ${storeSel}
         <div class="row" style="margin:8px 0;gap:4px">
           ${["uz", "ru", "en"].map((l) => `<button type="button" class="btn btn-ghost btn-sm ${lang() === l ? "active" : ""}" data-lang="${l}">${l.toUpperCase()}</button>`).join("")}
+          ${themeToggleHtml()}
         </div>
         ${warn}
         ${items
@@ -2567,6 +2569,7 @@ async function render() {
 const _render = render;
 async function renderAndAi() {
   await _render();
+  try { applyTheme(); bindThemeToggle(); } catch (e) { /* theme must not break POS */ }
   try { syncFinexAi(); } catch (e) { /* AI widget must not break POS */ }
 }
 window.addEventListener("hashchange", renderAndAi);

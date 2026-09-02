@@ -135,7 +135,7 @@ async function loadHistory() {
     if (stEl) {
       stEl.textContent = st.online
         ? "Model: " + (st.model || st.provider)
-        : "Knowledge Base (tashqi AI kaliti yo'q — lokal javob)";
+        : "AI model ulanmagan — AI_API_KEY kerak";
     }
     const data = await aiFetch("/api/ai/history");
     log.innerHTML = "";
@@ -191,7 +191,7 @@ async function sendChat() {
     wait.dataset.lastA = data.answer || "";
   } catch (e) {
     wait.classList.remove("ai-pending");
-    wait.textContent = "AI hozir javob bera olmadi. Asosiy POS ishlashda davom etadi. " + (e.message || "");
+    wait.textContent = e.message || "AI hozir javob bera olmadi. POS ishlashda davom etadi.";
     setErr(e.message || "AI xatolik");
   } finally {
     sending = false;
