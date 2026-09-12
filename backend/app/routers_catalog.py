@@ -105,8 +105,9 @@ def update_product(
     user: User = Depends(require_perm("products")),
     db: Session = Depends(get_db),
 ):
+    store = current_store(user, db)
     p = db.get(Product, product_id)
-    if not p or p.company_id != user.company_id:
+    if not p or p.company_id != user.company_id or p.store_id != store.id:
         raise HTTPException(404, "Mahsulot topilmadi")
     for key, val in body.model_dump().items():
         setattr(p, key, val)
@@ -121,8 +122,9 @@ def toggle_product(
     user: User = Depends(require_perm("products")),
     db: Session = Depends(get_db),
 ):
+    store = current_store(user, db)
     p = db.get(Product, product_id)
-    if not p or p.company_id != user.company_id:
+    if not p or p.company_id != user.company_id or p.store_id != store.id:
         raise HTTPException(404, "Mahsulot topilmadi")
     p.is_active = not p.is_active
     db.commit()

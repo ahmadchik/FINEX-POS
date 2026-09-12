@@ -92,7 +92,11 @@ def create_sale(
     if body.idempotency_key:
         existing = (
             db.query(Sale)
-            .filter(Sale.company_id == user.company_id, Sale.idempotency_key == body.idempotency_key)
+            .filter(
+                Sale.company_id == user.company_id,
+                Sale.store_id == store.id,
+                Sale.idempotency_key == body.idempotency_key,
+            )
             .first()
         )
         if existing:
@@ -116,7 +120,7 @@ def create_sale(
     prepared = []
     for item in body.items:
         product = db.get(Product, item.product_id)
-        if not product or product.company_id != user.company_id:
+        if not product or product.company_id != user.company_id or product.store_id != store.id:
             raise HTTPException(404, "Mahsulot topilmadi")
         if item.qty <= 0:
             raise HTTPException(400, "Miqdor noto'g'ri")
@@ -268,8 +272,9 @@ def list_sales(
 
 @router.get("/sales/{sale_id}")
 def get_sale(sale_id: int, user: User = Depends(require_perm("pos")), db: Session = Depends(get_db)):
+    store = current_store(user, db)
     sale = db.get(Sale, sale_id)
-    if not sale or sale.company_id != user.company_id:
+    if not sale or sale.company_id != user.company_id or sale.store_id != store.id:
         raise HTTPException(404, "Chek topilmadi")
     return sale_payload(sale)
 
@@ -283,8 +288,9 @@ def return_sale(
 ):
     if user.role == "CASHIER":
         raise HTTPException(403, "Qaytarish uchun manager/admin kerak")
+    store = current_store(user, db)
     sale = db.get(Sale, sale_id)
-    if not sale or sale.company_id != user.company_id:
+    if not sale or sale.company_id != user.company_id or sale.store_id != store.id:
         raise HTTPException(404, "Chek topilmadi")
     if sale.status == "RETURNED":
         return sale_payload(sale)

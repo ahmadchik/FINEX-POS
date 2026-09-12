@@ -1,5 +1,5 @@
 import { applyTheme, bindSaas, bindThemeToggle, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t, themeToggleHtml } from "./saas.js?v=theme2";
-import { rememberApiError, syncFinexAi } from "./ai.js?v=ai1";
+import { rememberApiError, syncFinexAi } from "./ai.js?v=aiux3";
 
 const root = document.getElementById("root");
 function money(n) {
@@ -205,7 +205,7 @@ function shell(inner) {
     ["staff", t("staff"), "staff"],
     ["settings", t("settings"), "settings"],
   ].filter((i) => !i[2] || can(i[2]));
-  const stores = u.stores || [];
+  const stores = (u.stores || []).filter((s) => s.is_active !== false);
   const storeSel =
     stores.length > 1
       ? `<select class="field" id="store-switch" style="margin:8px 0">${stores

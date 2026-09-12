@@ -83,11 +83,13 @@ export async function pageStores(api, money) {
   return `
     <h2>${t("stores")}</h2>
     <form id="store-form" class="card" style="margin-bottom:12px">
+      <input type="hidden" name="id" value="" />
       <div class="grid3" style="margin-top:0">
         <input class="field" name="name" placeholder="Do‘kon nomi" required />
         <input class="field" name="phone" placeholder="Telefon" />
         <input class="field" name="address" placeholder="Manzil" />
-        <button class="btn btn-gold" type="submit">Qo‘shish</button>
+        <button class="btn btn-gold" type="submit" id="store-submit">Qo‘shish</button>
+        <button class="btn btn-ghost" type="button" id="store-cancel" hidden>Bekor</button>
       </div>
       <div class="err" id="store-err" style="margin-top:8px"></div>
     </form>
@@ -99,6 +101,7 @@ export async function pageStores(api, money) {
           <td>${esc(s.phone)}</td>
           <td>${esc(s.address)}</td>
           <td>
+            <button class="btn btn-ghost btn-sm" data-edit="${s.id}" data-name="${esc(s.name)}" data-phone="${esc(s.phone)}" data-address="${esc(s.address)}">Tahrirlash</button>
             ${s.current ? "" : `<button class="btn btn-ghost btn-sm" data-switch="${s.id}">Kirish</button>`}
             <button class="btn btn-ghost btn-sm" data-stoggle="${s.id}">${s.is_active ? "O‘chirish" : "Yoqish"}</button>
           </td>
@@ -153,16 +156,42 @@ export async function pageTransfers(api) {
 export function bindSaas(page, api, setAuth, render) {
   const storeForm = document.getElementById("store-form");
   if (storeForm) {
+    const submitBtn = document.getElementById("store-submit");
+    const cancelBtn = document.getElementById("store-cancel");
+    const resetStoreForm = () => {
+      storeForm.reset();
+      storeForm.elements.id.value = "";
+      if (submitBtn) submitBtn.textContent = "Qo‘shish";
+      if (cancelBtn) cancelBtn.hidden = true;
+    };
+    cancelBtn?.addEventListener("click", resetStoreForm);
     storeForm.onsubmit = async (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(storeForm).entries());
+      const payload = { name: f.name, phone: f.phone || "", address: f.address || "" };
+      const id = Number(f.id || 0);
       try {
-        await api("/api/stores", { method: "POST", body: JSON.stringify(f) });
+        if (id) {
+          await api("/api/stores/" + id, { method: "PATCH", body: JSON.stringify(payload) });
+        } else {
+          await api("/api/stores", { method: "POST", body: JSON.stringify(payload) });
+        }
         render();
       } catch (ex) {
         document.getElementById("store-err").textContent = ex.message;
       }
     };
+    document.querySelectorAll("[data-edit]").forEach((b) => {
+      b.onclick = () => {
+        storeForm.elements.id.value = b.dataset.edit || "";
+        storeForm.elements.name.value = b.dataset.name || "";
+        storeForm.elements.phone.value = b.dataset.phone || "";
+        storeForm.elements.address.value = b.dataset.address || "";
+        if (submitBtn) submitBtn.textContent = "Saqlash";
+        if (cancelBtn) cancelBtn.hidden = false;
+        storeForm.elements.name.focus();
+      };
+    });
     document.querySelectorAll("[data-switch]").forEach((b) => {
       b.onclick = async () => {
         const data = await api("/api/auth/switch-store", { method: "POST", body: JSON.stringify({ store_id: Number(b.dataset.switch) }) });

@@ -7,7 +7,15 @@ from .base import ChatResult
 class FallbackProvider:
     name = "fallback"
 
-    def complete(self, messages: list[dict], *, max_tokens: int = 800, temperature: float = 0.3, timeout: float = 25) -> ChatResult:
+    def complete(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int = 800,
+        temperature: float = 0.3,
+        timeout: float = 25,
+        tools: list | None = None,
+    ) -> ChatResult:
         user = ""
         page = ""
         err = ""

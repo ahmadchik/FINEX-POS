@@ -46,7 +46,7 @@ def create_stock_in(
     total = 0.0
     for row in body.items:
         product = db.get(Product, row.product_id)
-        if not product or product.company_id != user.company_id:
+        if not product or product.company_id != user.company_id or product.store_id != store.id:
             raise HTTPException(404, "Mahsulot topilmadi")
         move_stock(db, product, row.qty, user=user, store_id=store.id, kind="IN", ref_type="stock_in", ref_id=doc.id)
         if row.buy_price:
@@ -84,8 +84,9 @@ def list_stock_ins(user: User = Depends(require_perm("stock")), db: Session = De
 
 @router.get("/stock-ins/{doc_id}")
 def get_stock_in(doc_id: int, user: User = Depends(require_perm("stock")), db: Session = Depends(get_db)):
+    store = current_store(user, db)
     doc = db.get(StockIn, doc_id)
-    if not doc or doc.company_id != user.company_id:
+    if not doc or doc.company_id != user.company_id or doc.store_id != store.id:
         raise HTTPException(404, "Hujjat topilmadi")
     return {
         "id": doc.id,

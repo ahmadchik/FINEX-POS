@@ -36,6 +36,8 @@ def current_store(user: User, db: Session) -> Store:
     store = None
     if user.store_id:
         store = db.get(Store, user.store_id)
+        if store and store.company_id != user.company_id:
+            store = None
     if not store:
         store = db.query(Store).filter(Store.company_id == user.company_id).first()
     if not store:

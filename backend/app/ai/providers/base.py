@@ -15,10 +15,19 @@ class ChatResult:
     fallback: bool = False
     error: str = ""
     extra: dict = field(default_factory=dict)
+    tool_calls: list = field(default_factory=list)
 
 
 class AiProvider(Protocol):
     name: str
 
-    def complete(self, messages: list[dict], *, max_tokens: int, temperature: float, timeout: float) -> ChatResult:
+    def complete(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int,
+        temperature: float,
+        timeout: float,
+        tools: list | None = None,
+    ) -> ChatResult:
         ...

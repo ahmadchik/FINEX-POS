@@ -1,6 +1,12 @@
 let lastError = null;
 let loadedHistory = false;
 let sending = false;
+let lastAppPage = null;
+let resizing = false;
+
+const SIZE_KEY = "finup_ai_size";
+const MIN_W = 280;
+const MIN_H = 300;
 
 export function rememberApiError(err) {
   if (!err || typeof err !== "object") return;
@@ -59,12 +65,102 @@ function bubble(role, text) {
   return node;
 }
 
+function isMobile() {
+  return window.matchMedia("(max-width: 640px)").matches;
+}
+
+function loadSize() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SIZE_KEY) || "");
+    if (s && Number(s.w) >= MIN_W && Number(s.h) >= MIN_H) return { w: Number(s.w), h: Number(s.h) };
+  } catch (e) {
+    /* ignore */
+  }
+  return null;
+}
+
+function saveSize(w, h) {
+  try {
+    localStorage.setItem(SIZE_KEY, JSON.stringify({ w: Math.round(w), h: Math.round(h) }));
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+function applySize(panel) {
+  if (!panel || isMobile()) return;
+  const s = loadSize();
+  if (!s) return;
+  const maxW = Math.max(MIN_W, window.innerWidth - 24);
+  const maxH = Math.max(MIN_H, window.innerHeight - 100);
+  panel.style.width = Math.min(s.w, maxW) + "px";
+  panel.style.height = Math.min(s.h, maxH) + "px";
+}
+
+function collapsePanel() {
+  const panel = document.getElementById("finex-ai-panel");
+  if (panel) {
+    panel.hidden = true;
+    panel.setAttribute("hidden", "");
+  }
+  const btn = document.getElementById("finex-ai-toggle");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+
+function openPanel() {
+  const panel = document.getElementById("finex-ai-panel");
+  if (!panel) return;
+  applySize(panel);
+  panel.hidden = false;
+  panel.removeAttribute("hidden");
+  const btn = document.getElementById("finex-ai-toggle");
+  if (btn) btn.setAttribute("aria-expanded", "true");
+  loadHistory();
+  const input = document.getElementById("finex-ai-input");
+  if (input) input.focus();
+}
+
+function bindResize(panel) {
+  const handle = document.getElementById("finex-ai-resize");
+  if (!handle || !panel) return;
+  handle.addEventListener("pointerdown", (e) => {
+    if (isMobile()) return;
+    e.preventDefault();
+    resizing = true;
+    handle.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = panel.getBoundingClientRect().width;
+    const startH = panel.getBoundingClientRect().height;
+    const onMove = (ev) => {
+      if (!resizing) return;
+      const maxW = Math.max(MIN_W, window.innerWidth - 24);
+      const maxH = Math.max(MIN_H, window.innerHeight - 100);
+      const w = Math.min(maxW, Math.max(MIN_W, startW + (startX - ev.clientX)));
+      const h = Math.min(maxH, Math.max(MIN_H, startH + (startY - ev.clientY)));
+      panel.style.width = w + "px";
+      panel.style.height = h + "px";
+    };
+    const onUp = (ev) => {
+      resizing = false;
+      handle.releasePointerCapture(ev.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      const box = panel.getBoundingClientRect();
+      saveSize(box.width, box.height);
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+  });
+}
+
 function ensureWidget() {
   if (document.getElementById("finex-ai-root")) return;
   const root = el(`
     <div id="finex-ai-root" hidden>
-      <button type="button" id="finex-ai-toggle" class="ai-fab" aria-label="AI yordamchi">AI</button>
+      <button type="button" id="finex-ai-toggle" class="ai-fab" aria-label="AI yordamchi" aria-expanded="false">AI</button>
       <section id="finex-ai-panel" class="ai-panel" hidden>
+        <button type="button" id="finex-ai-resize" class="ai-resize" aria-label="O'lchamini o'zgartirish"></button>
         <header class="ai-head">
           <div>
             <div class="kicker">FINEX POS</div>
@@ -91,15 +187,11 @@ function ensureWidget() {
 
   document.getElementById("finex-ai-toggle").onclick = () => {
     const panel = document.getElementById("finex-ai-panel");
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden) {
-      loadHistory();
-      document.getElementById("finex-ai-input").focus();
-    }
+    if (!panel) return;
+    if (panel.hidden) openPanel();
+    else collapsePanel();
   };
-  document.getElementById("finex-ai-close").onclick = () => {
-    document.getElementById("finex-ai-panel").hidden = true;
-  };
+  document.getElementById("finex-ai-close").onclick = () => collapsePanel();
   document.getElementById("finex-ai-form").onsubmit = (e) => {
     e.preventDefault();
     sendChat();
@@ -112,6 +204,7 @@ function ensureWidget() {
   });
   document.getElementById("finex-ai-clear").onclick = clearHistory;
   document.getElementById("finex-ai-report").onclick = reportProblem;
+  bindResize(document.getElementById("finex-ai-panel"));
 }
 
 function setErr(msg) {
@@ -240,9 +333,26 @@ export function syncFinexAi() {
   if (!root) return;
   const show = shouldShow();
   root.hidden = !show;
+  const page = currentPage();
   if (!show) {
-    const panel = document.getElementById("finex-ai-panel");
-    if (panel) panel.hidden = true;
+    collapsePanel();
     loadedHistory = false;
+    lastAppPage = null;
+    const log = document.getElementById("finex-ai-log");
+    if (log) log.innerHTML = "";
+    return;
   }
+  if (lastAppPage && lastAppPage !== page) {
+    collapsePanel();
+  }
+  lastAppPage = page;
 }
+
+function onAppHashChange() {
+  if (!shouldShow()) return;
+  const page = currentPage();
+  if (lastAppPage && lastAppPage !== page) collapsePanel();
+  lastAppPage = page;
+}
+
+window.addEventListener("hashchange", onAppHashChange);

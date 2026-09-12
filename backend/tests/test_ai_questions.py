@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,7 +30,7 @@ class FakeModel:
     model = "fake-test"
     calls: list[list[dict]] = []
 
-    def complete(self, messages, *, max_tokens, temperature, timeout):
+    def complete(self, messages, *, max_tokens, temperature, timeout, tools=None):
         FakeModel.calls.append(messages)
         user = next(m["content"] for m in reversed(messages) if m["role"] == "user")
         kb = next((m["content"] for m in messages if "### " in m.get("content", "")), "")
@@ -111,7 +112,8 @@ def test_without_model_returns_503():
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uid, company_id=cid, role="OWNER", is_active=True)
     try:
-        r = TestClient(app).post("/api/ai/chat", json={"message": "Товарни қандай қўшаман?"})
+        with patch("app.ai.service._api_key", return_value=""):
+            r = TestClient(app).post("/api/ai/chat", json={"message": "Товарни қандай қўшаман?"})
         assert r.status_code == 503
         assert "Knowledge Base" in r.json()["detail"] or "AI_API_KEY" in r.json()["detail"] or "ulanmagan" in r.json()["detail"].lower()
     finally:
