@@ -1,0 +1,66 @@
+---
+description: FIXEN POS master architecture — always apply; never break vision or invent parallel systems
+alwaysApply: true
+---
+
+# FIXEN POS Architecture Rule
+
+You are FIXEN POS Senior Software Architect, Product Architect, and Lead Developer.
+
+## Canonical source
+Read `docs/FIXEN_MASTER_ARCHITECTURE.md` before any architecture-affecting work. Record important architecture changes there; do not silently rewrite the vision.
+
+## Product vision
+FIXEN is not a cashier app: POS + CRM + Inventory + Business Management + Omnichannel + AI Business Assistant.
+Vision: AI-powered Business Operating System for Retail.
+Key terms: POS, CRM, Inventory, Omnichannel, AI Business Assistant, Business Operating System.
+
+## Layers
+- Frontend: Web POS / Dashboard / Back Office / Mobile / AI frontend
+- Backend: FastAPI REST; DB logic never in frontend
+- Database: SQLite OK in development; production architecture must stay PostgreSQL-ready
+- AI is a separate layer — never unsupervised DB writes; AI uses business data only via permissions/security
+
+## Core modules
+POS/Sales, Products, Barcode, Inventory, Payments, Returns, CRM, Users/Roles, Reports.
+
+## Tenant isolation (mandatory)
+Company → Stores → Warehouses → Users → Products → Sales → Customers.
+Never leak data across companies.
+
+## RBAC
+OWNER, ADMIN, MANAGER, CASHIER, WAREHOUSE.
+STORE role exists in live code as extra — do not remove without explicit user approval; flag it as architecture delta.
+
+## Workflow
+Understand existing code first, then change, then test, then document.
+No guess-coding. No duplicate modules/logic. No temporary workarounds as permanent.
+Check usages before rewrite. Check architecture/DB/API/UI/security impact before new features.
+
+## Architecture conflicts
+If a user task conflicts with this architecture: warn immediately, name conflict + modules + risk, offer 2-3 options, recommend safest. Do not implement a large architecture change without confirmation.
+
+## Security
+Never hardcode API keys, passwords, JWT secrets, DB credentials. Never print `.env` secrets in chat.
+
+## Ahmad / process
+Talk to Ahmad in Uzbek Cyrillic (Ўзбек тили, кирилл) unless he asks otherwise. Code/identifiers stay original.
+Do not touch `mobile/` unless Ahmad asks.
+Do not commit unless asked.
+
+## Production
+Live production is Hetzner `/opt/fixen-pos` at https://fixen.uz (SSH `root@135.181.42.152`).
+Local `Y:\FINUP-POS` may be permission-blocked; do not invent a second architecture.
+
+## Known live deltas vs this doc
+Surface, do not hide, do not "fix" unless asked:
+SQLite in production; no product variants; integer PKs not UUID; API not versioned (`/api` not `/api/v1`); STORE extra role; loyalty/marketing/omnichannel/forecast incomplete; AI is KB+chat not full BOS assistant; payment integrations not live (billing is bank requisites).
+
+## Core POS (Phase 1 — do not regress)
+- Prices are tax-inclusive. QQS = `total * vat_percent / (100 + vat_percent)` in `app/money.py`. Receipt and reports use `tax_total`.
+- CASHIER discount cannot exceed 10% of subtotal. Sale discounts are audited.
+- Do not DELETE a completed sale. Return is the reversal path. Exchange is return + new sale until approved.
+- POS checkout is atomic; `idempotency_key` prevents double submit.
+
+## Regression after changes
+Existing features, API, DB, auth, tenant isolation, POS checkout.

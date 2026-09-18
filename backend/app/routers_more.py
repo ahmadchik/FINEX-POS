@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .deps import current_store, get_current_user, require_perm
+from .deps import current_store, forbid_company_kirim_write, get_current_user, require_perm
 from .ledger import customer_ledger
 from .models import CashTxn, Company, Customer, Expense, Store, User
 from .schemas import CustomerIn, DebtPayIn, ExpenseIn, SettingsIn
@@ -97,6 +97,7 @@ def create_expense(
     user: User = Depends(require_perm("cash")),
     db: Session = Depends(get_db),
 ):
+    forbid_company_kirim_write(user)
     store = current_store(user, db)
     cash = 0.0
     for t in db.query(CashTxn).filter(CashTxn.company_id == user.company_id, CashTxn.store_id == store.id):

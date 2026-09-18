@@ -88,20 +88,23 @@ export async function pageStores(api, money) {
         <input class="field" name="name" placeholder="Do‘kon nomi" required />
         <input class="field" name="phone" placeholder="Telefon" />
         <input class="field" name="address" placeholder="Manzil" />
+        <input class="field" name="username" placeholder="Do'kon login" />
+        <input class="field" name="password" type="password" placeholder="Parol (yangi yoki o'zgartirish)" />
         <button class="btn btn-gold" type="submit" id="store-submit">Qo‘shish</button>
         <button class="btn btn-ghost" type="button" id="store-cancel" hidden>Bekor</button>
       </div>
       <div class="err" id="store-err" style="margin-top:8px"></div>
     </form>
     <table class="table">
-      <thead><tr><th>Nomi</th><th>Telefon</th><th>Manzil</th><th></th></tr></thead>
+      <thead><tr><th>Nomi</th><th>Login</th><th>Telefon</th><th>Manzil</th><th></th></tr></thead>
       <tbody>
         ${rows.map((s) => `<tr class="${s.is_active ? "" : "badge-off"}">
           <td>${esc(s.name)}${s.current ? " · <b>joriy</b>" : ""}</td>
+          <td>${esc(s.username || "")}</td>
           <td>${esc(s.phone)}</td>
           <td>${esc(s.address)}</td>
           <td>
-            <button class="btn btn-ghost btn-sm" data-edit="${s.id}" data-name="${esc(s.name)}" data-phone="${esc(s.phone)}" data-address="${esc(s.address)}">Tahrirlash</button>
+            <button class="btn btn-ghost btn-sm" data-edit="${s.id}" data-name="${esc(s.name)}" data-username="${esc(s.username || "")}" data-phone="${esc(s.phone)}" data-address="${esc(s.address)}">Tahrirlash</button>
             ${s.current ? "" : `<button class="btn btn-ghost btn-sm" data-switch="${s.id}">Kirish</button>`}
             <button class="btn btn-ghost btn-sm" data-stoggle="${s.id}">${s.is_active ? "O‘chirish" : "Yoqish"}</button>
           </td>
@@ -129,14 +132,18 @@ export async function pageSuppliers(api) {
 }
 
 export async function pageTransfers(api) {
-  const [stores, products, rows] = await Promise.all([
-    api("/api/stores"),
-    api("/api/products"),
-    api("/api/transfers"),
-  ]);
+  let u = null;
+  try { u = JSON.parse(localStorage.getItem("finup_pos_user") || "null"); } catch (e) { u = null; }
+  const isCompany = !!(u && (u.cabinet === "company" || u.role === "OWNER" || u.role === "ADMIN"));
+  const fetches = isCompany
+    ? [api("/api/transfers")]
+    : [api("/api/stores"), api("/api/products"), api("/api/transfers")];
+  const results = await Promise.all(fetches);
+  const stores = isCompany ? [] : results[0];
+  const products = isCompany ? [] : results[1];
+  const rows = isCompany ? results[0] : results[2];
   window.__tr = { stores, products };
-  return `
-    <h2>${t("transfers")}</h2>
+  const formHtml = isCompany ? "" : `
     <form id="tr-form" class="card" style="margin-bottom:12px">
       <div class="grid3" style="margin-top:0">
         <select class="field" name="from_store_id">${stores.map((s) => `<option value="${s.id}">Dan: ${esc(s.name)}</option>`).join("")}</select>
@@ -146,7 +153,10 @@ export async function pageTransfers(api) {
         <button class="btn btn-gold" type="submit">O‘tkazish</button>
       </div>
       <div class="err" id="tr-err" style="margin-top:8px"></div>
-    </form>
+    </form>`;
+  return `
+    <h2>${t("transfers")}</h2>
+    ${formHtml}
     <table class="table">
       <thead><tr><th>Raqam</th><th>Dan</th><th>Ga</th><th>Sana</th></tr></thead>
       <tbody>${rows.map((r) => `<tr><td>${esc(r.number)}</td><td>${esc(r.from_store)}</td><td>${esc(r.to_store)}</td><td>${esc((r.created_at || "").slice(0, 16))}</td></tr>`).join("")}</tbody>
@@ -168,7 +178,7 @@ export function bindSaas(page, api, setAuth, render) {
     storeForm.onsubmit = async (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(storeForm).entries());
-      const payload = { name: f.name, phone: f.phone || "", address: f.address || "" };
+      const payload = { name: f.name, phone: f.phone || "", address: f.address || "", username: (f.username || "").trim(), password: f.password || "" };
       const id = Number(f.id || 0);
       try {
         if (id) {
@@ -185,6 +195,8 @@ export function bindSaas(page, api, setAuth, render) {
       b.onclick = () => {
         storeForm.elements.id.value = b.dataset.edit || "";
         storeForm.elements.name.value = b.dataset.name || "";
+        storeForm.elements.username.value = b.dataset.username || "";
+        storeForm.elements.password.value = "";
         storeForm.elements.phone.value = b.dataset.phone || "";
         storeForm.elements.address.value = b.dataset.address || "";
         if (submitBtn) submitBtn.textContent = "Saqlash";

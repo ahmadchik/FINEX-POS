@@ -433,8 +433,13 @@ export function bindPlatform(_page, api, setAuth, render) {
     const out = document.getElementById("plat-reset-out");
     const err = document.getElementById("plat-reset-err");
     try {
-      const data = await platFetch("/api/platform/companies/" + id + "/reset-password", { method: "POST", body: "{}" });
-      if (out) out.textContent = "Login: " + data.username + " · yangi parol: " + data.password;
+      const fd = new FormData(e.target);
+      const password = String(fd.get("password") || "");
+      const data = await platFetch("/api/platform/companies/" + id + "/reset-password", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      });
+      if (out) out.textContent = "Login: " + data.username + " — parol yangilandi";
       if (err) err.textContent = "";
     } catch (ex) {
       if (err) err.textContent = ex.message;

@@ -7,8 +7,8 @@ from .db import get_db
 from .deps import get_current_user
 from .models import Category, Company, Product, Store, User, next_account_no
 from .plans import is_writable, refresh_company_status
-from .schemas import LoginIn, RegisterIn, TokenOut, UserOut
-from .security import ROLE_PERMS, create_token, hash_password, rate_limit, verify_password
+from .schemas import ChangePasswordIn, LoginIn, RegisterIn, TokenOut, UserOut
+from .security import ROLE_PERMS, client_host, create_token, hash_password, rate_limit, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -52,6 +52,7 @@ def user_out(db: Session, user: User) -> UserOut:
         paid_until=company.paid_until.isoformat() if company and company.paid_until else None,
         writable=is_writable(company),
         stores=stores,
+        cabinet="company" if user.role in ("OWNER", "ADMIN") else "store",
     )
 
 
@@ -83,7 +84,7 @@ def seed_catalog(db: Session, company_id: int, store_id: int) -> None:
 
 @router.post("/register", response_model=TokenOut)
 def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
-    rate_limit("reg:" + (request.client.host if request.client else "x"), 5, 300)
+    rate_limit("reg:" + client_host(request), 5, 300)
     username = body.username.strip().lower()
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(409, "Bu login band")
@@ -122,8 +123,10 @@ def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
-    rate_limit("login:" + (request.client.host if request.client else "x") + ":" + body.username.strip().lower(), 8, 60)
-    username = body.username.strip().lower()
+    host = client_host(request)
+    username = (body.username or "").strip().lower()
+    rate_limit("login-ip:" + host, 40, 60)
+    rate_limit("login:" + host + ":" + username, 8, 60)
     user = db.query(User).filter(User.username == username).first()
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(401, "Login yoki parol noto'g'ri")
@@ -137,3 +140,19 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return user_out(db, user)
+
+
+@router.post("/change-password")
+def change_password(body: ChangePasswordIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rate_limit("pw:" + str(user.id), 8, 60)
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(400, "Joriy parol noto'g'ri")
+    new_pw = body.new_password.strip()
+    if len(new_pw) < 6:
+        raise HTTPException(400, "Yangi parol kamida 6 belgi")
+    if new_pw == body.current_password:
+        raise HTTPException(400, "Yangi parol joriydan farq qilsin")
+    user.password_hash = hash_password(new_pw)
+    write_audit(db, user, "auth.password.change", entity="user", entity_id=user.id)
+    db.commit()
+    return {"ok": True}

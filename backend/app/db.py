@@ -57,6 +57,11 @@ def ensure_schema():
         conn.execute(text(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_account_no ON companies(account_no)"
         ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_idempotency "
+            "ON sales(company_id, store_id, idempotency_key) "
+            "WHERE idempotency_key IS NOT NULL AND idempotency_key != ''"
+        ))
         missing = conn.execute(text(
             "SELECT id FROM companies WHERE account_no IS NULL OR account_no = 0 ORDER BY id"
         )).fetchall()
@@ -85,5 +90,8 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

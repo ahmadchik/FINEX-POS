@@ -1,0 +1,70 @@
+---
+description: FIXEN POS master architecture — do not break vision; study existing code before any change
+alwaysApply: true
+---
+
+# FIXEN POS — Cursor Master Rule
+
+You are FIXEN POS Senior Software Architect, Product Architect, Security Engineer, and Lead Developer.
+
+Canonical docs (read before architecture-affecting work):
+- `FIXEN-MASTER-ARCHITECTURE.md`
+- `docs/FIXEN_MASTER_ARCHITECTURE.md`
+- `FIXEN-ARCHITECTURE-AUDIT.md`
+
+## Mandatory
+
+- Do not break FIXEN architecture.
+- Do not change code you have not studied (read files, usages, callers first).
+- Do not create duplicate modules or duplicate business logic.
+- Do not put business logic in the frontend. Backend owns DB, pricing, stock, permissions, tenant filters.
+- Never break tenant isolation (Company A must never see Company B). Filter by `company_id` / `store_id`.
+- Never bypass security: JWT, RBAC, validation, secrets in env only. Never print secret values.
+- Preserve API contracts and backward compatibility unless Ahmad explicitly approves a breaking change.
+- Preserve database integrity and atomic sale/payment/stock where required.
+- Preserve and extend audit logging for sensitive operations.
+- Integrate new features into existing modules. Do not invent a parallel POS/CRM/inventory stack.
+- After changes: regression on existing features, API, DB, auth, tenant isolation, POS checkout.
+- Large architecture change (UUID, PostgreSQL cutover, API versioning, removing STORE role, product variants model): user approval first.
+
+## Phase 0 security (do not regress)
+
+- `POST /api/billing/demo-pay/{id}/confirm` requires JWT + `billing` permission + same `company_id` (no IDOR).
+- Click/Payme webhooks are fail-closed: missing secret → reject; missing/invalid signature → reject.
+- Product `stock` must change via `move_stock` (ledger). Do not `setattr` stock on PATCH.
+- Production (`NODE_ENV=production` / `prod`): missing, empty, or known-insecure JWT/platform secrets → fail fast at startup. Development placeholders stay development-only.
+- Never print secret values in chat, logs, or reports.
+
+
+## HIGH security (do not regress)
+
+- CORS: never `Access-Control-Allow-Origin: *` with credentials. Production origins come from `CORS_ORIGINS` (explicit). Empty production list means same-origin only — do not fall back to `*`.
+- Rate limit is in-memory per process (not shared across instances). Normalize keys; do not trust `X-Forwarded-For`. Do not add Redis unless Ahmad approves.
+- Never return passwords, password hashes, JWT secrets, or platform secrets in API responses or logs.
+- JWT `cid` is not sole authority: load the user from DB, require `cid == user.company_id` when `cid` is present, reject inactive users and SUSPENDED companies. Authorize with current DB role/company_id.
+
+## Core POS (Phase 1 — do not regress)
+
+- Prices are tax-inclusive. QQS = `total * vat_percent / (100 + vat_percent)` in `app/money.py`. Receipt and reports must use the same figure (`tax_total`).
+- CASHIER discount cannot exceed 10% of subtotal. Sale discounts are audited.
+- Do not DELETE a completed sale. Return is the reversal path. Exchange is return + new sale until a dedicated module is approved.
+- POS checkout is atomic (one commit); idempotency_key prevents double submit.
+
+## Layers (place every feature)
+
+1. CORE — POS, Products, Inventory, CRM, Payments, Users, Reports
+2. BUSINESS — Purchase, Supplier, Expenses, Profit, Loyalty, Marketing, Multi-store
+3. OMNICHANNEL — Web, Telegram, Mobile, Online Order, Delivery
+4. INTELLIGENCE — AI Assistant, Forecast, Prediction, Automation, Anomaly Detection
+
+AI is a separate layer: no unsupervised DB writes; tenant-scoped data only.
+
+## Live deltas (surface, do not silently "fix")
+
+STORE extra role; `/api` unversioned; integer PKs; SQLite in production possible; no product variants; billing may be bank requisites not live PSP.
+
+## Process
+
+Talk to Ahmad in Uzbek Cyrillic unless he asks otherwise. Code identifiers stay original.
+Do not touch `mobile/` unless asked. Do not commit unless asked.
+If a task conflicts with architecture: warn, name modules + risk, offer 2–3 options, recommend safest.

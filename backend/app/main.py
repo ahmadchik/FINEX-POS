@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from .config import settings
+from .config import cors_origin_list, settings, validate_runtime_secrets
 from .db import ensure_schema
 from . import models  # noqa: F401
 from .routers_auth import router as auth_router
@@ -16,17 +16,18 @@ from .routers_pos import router as pos_router
 from .routers_saas import platform_router, saas_router
 from .routers_ai import router as ai_router
 
+validate_runtime_secrets(settings)
 ensure_schema()
 
 WEB_DIR = Path(__file__).parent / "web"
 ASSETS_DIR = os.path.normpath(str(WEB_DIR / "assets"))
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
-origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+origins = cors_origin_list(settings)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins or ["*"],
-    allow_credentials=True,
+    allow_origins=origins,
+    allow_credentials=bool(origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )

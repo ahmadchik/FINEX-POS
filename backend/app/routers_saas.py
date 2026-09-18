@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .audit import write_audit
 from .config import settings
 from .db import get_db
-from .deps import current_store, get_current_user, require_perm
+from .deps import current_store, forbid_company_kirim_write, get_current_user, require_perm
 from .ledger import customer_ledger, move_stock
 from .models import (
     BillingPayment,
@@ -37,7 +37,7 @@ from .schemas import (
     SupplierIn,
     TransferCreate,
 )
-from .security import create_platform_token, create_token, decode_token, hash_password, rate_limit
+from .security import client_host, create_platform_token, create_token, decode_token, hash_password, rate_limit
 
 saas_router = APIRouter(prefix="/api", tags=["saas"])
 platform_router = APIRouter(prefix="/api/platform", tags=["platform"])
@@ -66,6 +66,57 @@ def _user_count(db: Session, company_id: int) -> int:
     return db.query(User).filter(User.company_id == company_id, User.is_active.is_(True)).count()
 
 
+def _store_user(db: Session, store: Store) -> User | None:
+    return (
+        db.query(User)
+        .filter(
+            User.role == "STORE",
+            User.store_id == store.id,
+            User.company_id == store.company_id,
+        )
+        .first()
+    )
+
+
+def _upsert_store_login(db: Session, company_id: int, store: Store, username, password, *, require_password=False):
+    username = (username or "").strip().lower()
+    existing = _store_user(db, store)
+    if not username and not existing:
+        return None
+    if not username:
+        return existing
+    taken = db.query(User).filter(User.username == username)
+    if existing:
+        taken = taken.filter(User.id != existing.id)
+    if taken.first():
+        raise HTTPException(409, "Bu login band")
+    pw = password or ""
+    if existing:
+        existing.username = username
+        existing.full_name = store.name
+        existing.store_id = store.id
+        existing.company_id = company_id
+        if pw:
+            if len(pw) < 6:
+                raise HTTPException(400, "Parol kamida 6 belgi")
+            existing.password_hash = hash_password(pw)
+        return existing
+    if require_password or len(pw) < 6:
+        if len(pw) < 6:
+            raise HTTPException(400, "Parol kamida 6 belgi")
+    user = User(
+        company_id=company_id,
+        store_id=store.id,
+        full_name=store.name,
+        username=username,
+        password_hash=hash_password(pw),
+        role="STORE",
+        is_active=True,
+    )
+    db.add(user)
+    return user
+
+
 def require_platform(authorization: str | None = Header(default=None)):
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Platform token kerak")
@@ -89,6 +140,7 @@ def list_stores(user: User = Depends(require_perm("stores")), db: Session = Depe
             "phone": s.phone,
             "is_active": bool(s.is_active),
             "current": s.id == user.store_id,
+            "username": (su.username if (su := _store_user(db, s)) else ""),
         }
         for s in rows
     ]
@@ -111,7 +163,12 @@ def create_store(body: StoreIn, user: User = Depends(require_perm("stores")), db
     write_audit(db, user, "store.create", entity="store", payload={"name": store.name})
     db.commit()
     db.refresh(store)
-    return {"id": store.id, "name": store.name}
+    uname = (body.username or "").strip()
+    su = _upsert_store_login(
+        db, company.id, store, body.username, body.password, require_password=bool(uname)
+    )
+    db.commit()
+    return {"id": store.id, "name": store.name, "username": su.username if su else ""}
 
 
 @saas_router.patch("/stores/{store_id}")
@@ -130,8 +187,15 @@ def patch_store(
         store.address = body.address
     if body.phone is not None:
         store.phone = body.phone
+    su = _upsert_store_login(db, user.company_id, store, body.username, body.password)
     db.commit()
-    return {"id": store.id, "name": store.name, "address": store.address, "phone": store.phone}
+    return {
+        "id": store.id,
+        "name": store.name,
+        "address": store.address,
+        "phone": store.phone,
+        "username": su.username if su else "",
+    }
 
 
 @saas_router.post("/stores/{store_id}/toggle")
@@ -149,6 +213,8 @@ def toggle_store(store_id: int, user: User = Depends(require_perm("stores")), db
 
 @saas_router.post("/auth/switch-store")
 def switch_store(body: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role == "STORE":
+        raise HTTPException(403, "Do'kon kabinetidan boshqa do'konga o'tib bo'lmaydi")
     store_id = int(body.get("store_id") or 0)
     store = db.get(Store, store_id)
     if not store or store.company_id != user.company_id or not store.is_active:
@@ -267,11 +333,18 @@ def billing_demo_page(payment_id: int, db: Session = Depends(get_db)):
 
 
 @saas_router.post("/billing/demo-pay/{payment_id}/confirm")
-def billing_demo_confirm(payment_id: int, db: Session = Depends(get_db)):
-    return _activate_payment(db, payment_id, method="demo")
+def billing_demo_confirm(
+    payment_id: int,
+    user: User = Depends(require_perm("billing")),
+    db: Session = Depends(get_db),
+):
+    pay = db.get(BillingPayment, payment_id)
+    if not pay or pay.company_id != user.company_id:
+        raise HTTPException(404, "To'lov topilmadi")
+    return _activate_payment(db, payment_id, method="demo", user=user)
 
 
-def _activate_payment(db: Session, payment_id: int, method: str = "") -> dict:
+def _activate_payment(db: Session, payment_id: int, method: str = "", user: User | None = None) -> dict:
     pay = db.get(BillingPayment, payment_id)
     if not pay:
         raise HTTPException(404, "To'lov topilmadi")
@@ -286,6 +359,15 @@ def _activate_payment(db: Session, payment_id: int, method: str = "") -> dict:
     pay.status = "paid"
     pay.method = method or pay.method
     pay.paid_at = now
+    write_audit(
+        db,
+        user,
+        "billing.activate",
+        entity="billing_payment",
+        entity_id=pay.id,
+        company_id=pay.company_id,
+        payload={"plan": pay.plan, "method": method or pay.method},
+    )
     db.commit()
     return {"ok": True, "plan": company.plan, "paid_until": company.paid_until.isoformat()}
 
@@ -293,22 +375,24 @@ def _activate_payment(db: Session, payment_id: int, method: str = "") -> dict:
 def _verify_click_sign(body: dict) -> None:
     secret = (settings.click_secret or "").strip()
     if not secret:
-        return
-    sign = str(body.get("sign_string") or body.get("sign") or "").lower()
+        raise HTTPException(503, "Click webhook sozlanmagan")
+    sign = str(body.get("sign_string") or body.get("sign") or "").strip().lower()
+    if not sign:
+        raise HTTPException(403, "Click imzo yo'q")
     raw = (
         f"{body.get('click_trans_id', '')}{body.get('service_id', '')}{secret}"
         f"{body.get('merchant_trans_id', '')}{body.get('amount', '')}"
         f"{body.get('action', '')}{body.get('sign_time', '')}"
     )
     expect = hashlib.md5(raw.encode()).hexdigest()
-    if not sign or not hmac.compare_digest(expect, sign):
+    if not hmac.compare_digest(expect, sign):
         raise HTTPException(403, "Click imzo noto'g'ri")
 
 
 def _verify_payme_auth(authorization: str | None) -> None:
     key = (settings.payme_key or "").strip()
     if not key:
-        return
+        raise HTTPException(503, "Payme webhook sozlanmagan")
     if not authorization:
         raise HTTPException(401, "Payme auth yo'q")
     got = authorization.replace("Basic ", "").strip()
@@ -369,6 +453,7 @@ def current_shift(user: User = Depends(require_perm("cash")), db: Session = Depe
 @saas_router.post("/shifts/open")
 def open_shift(body: ShiftOpenIn, user: User = Depends(require_perm("cash")), db: Session = Depends(get_db)):
     _writable(db, user)
+    forbid_company_kirim_write(user)
     store = current_store(user, db)
     exists = (
         db.query(CashShift)
@@ -394,6 +479,7 @@ def open_shift(body: ShiftOpenIn, user: User = Depends(require_perm("cash")), db
 
 @saas_router.post("/shifts/close")
 def close_shift(body: ShiftCloseIn, user: User = Depends(require_perm("cash")), db: Session = Depends(get_db)):
+    forbid_company_kirim_write(user)
     store = current_store(user, db)
     row = (
         db.query(CashShift)
@@ -452,6 +538,9 @@ def patch_supplier(
 @saas_router.post("/transfers")
 def create_transfer(body: TransferCreate, user: User = Depends(require_perm("stock")), db: Session = Depends(get_db)):
     _writable(db, user)
+    forbid_company_kirim_write(user)
+    if user.role == "STORE" and body.from_store_id != user.store_id:
+        raise HTTPException(403, "Faqat o'z do'koningizdan o'tkazma qilishingiz mumkin")
     src = db.get(Store, body.from_store_id)
     dst = db.get(Store, body.to_store_id)
     if not src or not dst or src.company_id != user.company_id or dst.company_id != user.company_id:
@@ -639,7 +728,7 @@ def _gen_password() -> str:
 
 @platform_router.post("/login")
 def platform_login(body: dict, request: Request):
-    rate_limit("plat:" + (request.client.host if request.client else "x"), 8, 60)
+    rate_limit("plat:" + client_host(request), 8, 60)
     login = str(body.get("username") or "").strip().lower()
     password = str(body.get("password") or "")
     if login != settings.platform_owner_login.strip().lower() or password != settings.platform_owner_password:
@@ -748,7 +837,7 @@ def platform_create_company(
     _: dict = Depends(require_platform),
     db: Session = Depends(get_db),
 ):
-    rate_limit("plat-create:" + (request.client.host if request.client else "x"), 10, 60)
+    rate_limit("plat-create:" + client_host(request), 10, 60)
     name = str(body.get("name") or "").strip()
     username = str(body.get("username") or "").strip().lower()
     full_name = str(body.get("full_name") or "Owner").strip()
@@ -944,7 +1033,7 @@ def platform_impersonate(
     _: dict = Depends(require_platform),
     db: Session = Depends(get_db),
 ):
-    rate_limit("plat-imp:" + (request.client.host if request.client else "x"), 12, 60)
+    rate_limit("plat-imp:" + client_host(request), 12, 60)
     c = db.get(Company, company_id)
     if not c:
         raise HTTPException(404, "Kompaniya topilmadi")
@@ -969,20 +1058,20 @@ def platform_reset_password(
     _: dict = Depends(require_platform),
     db: Session = Depends(get_db),
 ):
-    rate_limit("plat-rst:" + (request.client.host if request.client else "x"), 8, 60)
+    rate_limit("plat-rst:" + client_host(request), 8, 60)
     c = db.get(Company, company_id)
     if not c:
         raise HTTPException(404, "Kompaniya topilmadi")
     owner = _owner_of(db, c.id)
     if not owner:
         raise HTTPException(400, "Owner topilmadi")
-    password = str(body.get("password") or "")
+    password = str(body.get("password") or "").strip()
     if len(password) < 6:
-        password = _gen_password()
+        raise HTTPException(400, "Yangi parol kamida 6 belgi")
     owner.password_hash = hash_password(password)
     write_audit(db, owner, "platform.password.reset", entity="user", entity_id=owner.id, company_id=c.id)
     db.commit()
-    return {"ok": True, "username": owner.username, "password": password}
+    return {"ok": True, "username": owner.username}
 
 
 @platform_router.get("/audit")

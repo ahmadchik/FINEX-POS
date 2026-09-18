@@ -17,11 +17,17 @@ class LoginIn(BaseModel):
     password: str
 
 
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6)
+
+
 class UserOut(BaseModel):
     id: int
     full_name: str
     username: str
     role: str
+    cabinet: str = "company"
     company_id: int
     company_name: str
     store_id: Optional[int]
@@ -47,7 +53,7 @@ class TokenOut(BaseModel):
 class ProductIn(BaseModel):
     name: str = Field(min_length=1)
     sku: str = ""
-    barcode: str = Field(min_length=1)
+    barcode: str = ""
     category_id: Optional[int] = None
     unit: str = "dona"
     buy_price: float = 0
@@ -129,6 +135,8 @@ class StoreIn(BaseModel):
     name: str = Field(min_length=1)
     address: str = ""
     phone: str = ""
+    username: str = ""
+    password: str = ""
 
 
 class SupplierIn(BaseModel):

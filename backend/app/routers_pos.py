@@ -1,12 +1,15 @@
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
+from .audit import write_audit
 from .db import get_db
 from .deps import current_store, require_perm
 from .ledger import customer_ledger, move_stock
 from .models import CashShift, CashTxn, Company, Customer, Product, Sale, SaleItem, User
+from .money import CASHIER_MAX_DISCOUNT_PCT, money2, vat_included
 from .plans import is_writable
 from .schemas import ReturnIn, SaleCreate
 
@@ -45,6 +48,7 @@ def sale_payload(sale: Sale):
             for i in sale.items
         ],
         "tax_total": getattr(sale, "tax_total", 0) or 0,
+        "tax_inclusive": True,
     }
 
 
@@ -89,13 +93,14 @@ def create_sale(
     if not is_writable(company):
         raise HTTPException(402, "Obuna tugagan. Billing orqali to'lang.")
     store = current_store(user, db)
-    if body.idempotency_key:
+    key = (body.idempotency_key or "").strip() or None
+    if key:
         existing = (
             db.query(Sale)
             .filter(
                 Sale.company_id == user.company_id,
                 Sale.store_id == store.id,
-                Sale.idempotency_key == body.idempotency_key,
+                Sale.idempotency_key == key,
             )
             .first()
         )
@@ -116,28 +121,48 @@ def create_sale(
             .first()
         )
 
-    subtotal = 0.0
+    if money2(body.paid_cash) < 0 or money2(body.paid_card) < 0 or money2(body.paid_online) < 0:
+        raise HTTPException(400, "To'lov summasi manfiy bo'lmasin")
+
+    need = defaultdict(float)
     prepared = []
     for item in body.items:
+        if item.qty <= 0:
+            raise HTTPException(400, "Miqdor noto'g'ri")
         product = db.get(Product, item.product_id)
         if not product or product.company_id != user.company_id or product.store_id != store.id:
             raise HTTPException(404, "Mahsulot topilmadi")
-        if item.qty <= 0:
-            raise HTTPException(400, "Miqdor noto'g'ri")
-        if product.stock < item.qty:
-            raise HTTPException(400, f"{product.name}: qoldiq yetarli emas ({product.stock})")
+        if not product.is_active:
+            raise HTTPException(400, f"{product.name}: mahsulot o'chirilgan")
         price = item.price if item.price is not None else product.sell_price
-        line = round(price * item.qty, 2)
-        subtotal += line
-        prepared.append((product, item.qty, price, line))
+        if price is None or float(price) < 0:
+            raise HTTPException(400, "Narx noto'g'ri")
+        line = money2(float(price) * float(item.qty))
+        need[product.id] += float(item.qty)
+        prepared.append((product, float(item.qty), float(price), line))
 
-    discount = max(0.0, float(body.discount or 0))
-    total = max(0.0, round(subtotal - discount, 2))
+    for pid, qty in need.items():
+        product = db.get(Product, pid)
+        if product.stock + 0.0001 < qty:
+            raise HTTPException(400, f"{product.name}: qoldiq yetarli emas ({product.stock})")
+
+    subtotal = money2(sum(line for _p, _q, _pr, line in prepared))
+    discount = money2(max(0.0, float(body.discount or 0)))
+    if discount > subtotal + 0.01:
+        raise HTTPException(400, "Chegirma jamidan oshmasin")
+    if user.role == "CASHIER" and subtotal > 0:
+        cap = money2(subtotal * CASHIER_MAX_DISCOUNT_PCT / 100)
+        if discount > cap + 0.01:
+            raise HTTPException(403, f"Kassir chegirmasi {CASHIER_MAX_DISCOUNT_PCT}% dan oshmasin")
+    total = money2(max(0.0, subtotal - discount))
     vat = float(company.vat_percent or 0) if company else 0
-    tax_total = 0.0
-    if vat > 0:
-        tax_total = round(total * vat / (100 + vat), 2)
-    paid = round(body.paid_cash + body.paid_card + body.paid_online, 2)
+    tax_total = vat_included(total, vat)
+    paid_cash = money2(body.paid_cash)
+    paid_card = money2(body.paid_card)
+    paid_online = money2(body.paid_online)
+    paid = money2(paid_cash + paid_card + paid_online)
+    if money2(paid_card + paid_online) > total + 0.01:
+        raise HTTPException(400, "Karta/online to'lov jamidan oshmasin")
     credit = 0.0
     customer = None
     if body.customer_id:
@@ -147,13 +172,20 @@ def create_sale(
     if paid + 0.01 < total:
         if not (body.allow_credit and customer):
             raise HTTPException(400, "To'lov summasi yetarli emas")
-        credit = round(total - paid, 2)
+        credit = money2(total - paid)
         limit = float(customer.credit_limit or 0)
         if limit > 0 and (customer.debt or 0) + credit > limit + 0.01:
             raise HTTPException(400, "Mijoz kredit limiti oshdi")
-    change = round(max(0.0, body.paid_cash - max(0.0, total - body.paid_card - body.paid_online - credit)), 2)
+    change = money2(max(0.0, paid_cash - max(0.0, total - paid_card - paid_online - credit)))
 
     count = db.query(Sale).filter(Sale.company_id == user.company_id).count() + 1
+    pay_type = (body.payment_type or "CASH").upper()
+    if credit:
+        pay_type = "CREDIT"
+    elif paid_cash and (paid_card or paid_online):
+        pay_type = "MIXED"
+    elif paid_card and paid_online:
+        pay_type = "MIXED"
     sale = Sale(
         company_id=user.company_id,
         store_id=store.id,
@@ -162,23 +194,22 @@ def create_sale(
         subtotal=subtotal,
         discount=discount,
         total=total,
-        paid_cash=body.paid_cash,
-        paid_card=body.paid_card,
-        paid_online=body.paid_online,
+        paid_cash=paid_cash,
+        paid_card=paid_card,
+        paid_online=paid_online,
         change_amount=change,
-        payment_type=body.payment_type.upper() if not credit else "CREDIT",
+        payment_type=pay_type,
         status="PAID",
         customer_id=customer.id if customer else None,
         on_credit=credit,
         tax_total=tax_total,
         shift_id=open_shift.id if open_shift else None,
-        idempotency_key=body.idempotency_key,
+        idempotency_key=key,
     )
     db.add(sale)
     db.flush()
     for product, qty, price, line in prepared:
         move_stock(db, product, -qty, user=user, store_id=store.id, kind="SALE", ref_type="sale", ref_id=sale.id)
-        line_tax = round(line * vat / (100 + vat), 2) if vat > 0 else 0
         db.add(
             SaleItem(
                 sale_id=sale.id,
@@ -188,22 +219,39 @@ def create_sale(
                 price=price,
                 buy_price=product.buy_price or 0,
                 line_total=line,
-                tax=line_tax,
+                tax=vat_included(line, vat),
             )
         )
-    if body.paid_cash > 0:
+    if paid_cash > 0:
         db.add(
             CashTxn(
                 company_id=user.company_id,
                 store_id=store.id,
                 kind="SALE",
-                amount=body.paid_cash - change,
+                amount=money2(paid_cash - change),
                 note=sale.number,
                 sale_id=sale.id,
             )
         )
     if credit and customer:
         customer_ledger(db, customer, credit, user=user, kind="SALE", note=sale.number, sale_id=sale.id)
+    write_audit(
+        db,
+        user,
+        "sale.create",
+        entity="sale",
+        entity_id=sale.id,
+        payload={"total": total, "discount": discount, "tax_total": tax_total, "payment_type": pay_type},
+    )
+    if discount > 0:
+        write_audit(
+            db,
+            user,
+            "sale.discount",
+            entity="sale",
+            entity_id=sale.id,
+            payload={"discount": discount, "subtotal": subtotal, "role": user.role},
+        )
     db.commit()
     db.refresh(sale)
     return sale_payload(sale)
@@ -332,14 +380,14 @@ def return_sale(
                 note=sale.number,
             )
     ratio = refund_goods / float(sale.subtotal) if sale.subtotal else 1
-    refund = round(float(sale.total) * ratio, 2)
+    refund = money2(float(sale.total) * ratio)
     credit_back = min(float(sale.on_credit or 0), refund)
-    cash_back = round(max(0.0, refund - credit_back), 2)
+    cash_back = money2(max(0.0, refund - credit_back))
     if credit_back and sale.customer_id:
         customer = db.get(Customer, sale.customer_id)
         if customer:
             customer_ledger(db, customer, -credit_back, user=user, kind="RETURN", note=sale.number, sale_id=sale.id)
-        sale.on_credit = round(max(0.0, float(sale.on_credit or 0) - credit_back), 2)
+        sale.on_credit = money2(max(0.0, float(sale.on_credit or 0) - credit_back))
     if cash_back > 0:
         db.add(
             CashTxn(
@@ -353,6 +401,14 @@ def return_sale(
         )
     fully = all(float(i.returned_qty or 0) + 0.0001 >= float(i.qty) for i in sale.items)
     sale.status = "RETURNED" if fully else "PARTIAL"
+    write_audit(
+        db,
+        user,
+        "sale.return",
+        entity="sale",
+        entity_id=sale.id,
+        payload={"refund": refund, "full": fully},
+    )
     db.commit()
     db.refresh(sale)
     return sale_payload(sale)

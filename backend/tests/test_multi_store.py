@@ -259,7 +259,17 @@ def test_transfer_moves_stock_between_stores(client):
     _seed_owner(Session, username="xfer")
     _token, user, headers = _login(api, "xfer")
     store_a = user["store_id"]
-    store_b = api.post("/api/stores", headers=headers, json={"name": "B-X"}).json()["id"]
+    store_b = api.post(
+        "/api/stores",
+        headers=headers,
+        json={"name": "B-X", "username": "store_bx", "password": "secret12"},
+    ).json()["id"]
+    patched = api.patch(
+        f"/api/stores/{store_a}",
+        headers=headers,
+        json={"name": "A-Dokon", "username": "store_ax", "password": "secret12", "phone": "", "address": ""},
+    )
+    assert patched.status_code == 200, patched.text
     prod = api.post(
         "/api/products",
         headers=headers,
@@ -275,9 +285,10 @@ def test_transfer_moves_stock_between_stores(client):
     pid = prod.json()["id"]
     assert prod.json()["stock"] == 10
 
+    _tok, _su, sh = _login(api, "store_ax")
     xfer = api.post(
         "/api/transfers",
-        headers=headers,
+        headers=sh,
         json={
             "from_store_id": store_a,
             "to_store_id": store_b,
@@ -286,12 +297,11 @@ def test_transfer_moves_stock_between_stores(client):
     )
     assert xfer.status_code == 200, xfer.text
 
-    left = api.get("/api/products", headers=headers).json()
+    left = api.get("/api/products", headers=sh).json()
     a_row = next(p for p in left if p["id"] == pid)
     assert a_row["stock"] == 0
 
-    switched = api.post("/api/auth/switch-store", headers=headers, json={"store_id": store_b})
-    headers = {"Authorization": f"Bearer {switched.json()['access']}"}
+    _tokb, _sub, headers = _login(api, "store_bx")
     b_rows = api.get("/api/products", headers=headers).json()
     assert len(b_rows) == 1
     assert b_rows[0]["barcode"] == "3333333333333"
@@ -313,3 +323,128 @@ def test_login_unchanged(client):
     assert "stores" in ok.json()["user"]
     me = api.get("/api/auth/me", headers={"Authorization": f"Bearer {ok.json()['access']}"})
     assert me.status_code == 200
+
+def test_store_login_isolation_and_no_switch(client):
+    api, Session = client
+    _seed_owner(Session, username="vipowner")
+    _token, user, headers = _login(api, "vipowner")
+    store_a = user["store_id"]
+
+    prod = api.post(
+        "/api/products",
+        headers=headers,
+        json={
+            "name": "Product A",
+            "barcode": "5555555555555",
+            "buy_price": 1000,
+            "sell_price": 2000,
+            "stock": 3,
+        },
+    )
+    assert prod.status_code == 200, prod.text
+
+    created = api.post(
+        "/api/stores",
+        headers=headers,
+        json={"name": "B-Dokkon", "username": "storeb1", "password": "store12", "phone": "", "address": ""},
+    )
+    assert created.status_code == 200, created.text
+    store_b = created.json()["id"]
+    assert created.json().get("username") == "storeb1"
+
+    _tok, su, sh = _login(api, "storeb1", "store12")
+    assert su["cabinet"] == "store"
+    assert su["role"] == "STORE"
+    assert su["store_id"] == store_b
+    assert api.get("/api/products", headers=sh).json() == []
+    assert api.post("/api/auth/switch-store", headers=sh, json={"store_id": store_a}).status_code == 403
+    assert api.get("/api/stores", headers=sh).status_code == 403
+
+
+def test_owner_cannot_write_stock_cash(client):
+    api, Session = client
+    _seed_owner(Session, username="ownerkirim")
+    _token, user, headers = _login(api, "ownerkirim")
+    store_a = user["store_id"]
+    prod = api.post(
+        "/api/products",
+        headers=headers,
+        json={
+            "name": "Sut",
+            "barcode": "4444444444444",
+            "buy_price": 1000,
+            "sell_price": 2000,
+            "stock": 5,
+        },
+    )
+    assert prod.status_code == 200, prod.text
+    pid = prod.json()["id"]
+
+    assert api.post(
+        "/api/stock-ins",
+        headers=headers,
+        json={"supplier": "Taminot", "note": "", "items": [{"product_id": pid, "qty": 2, "buy_price": 1000}]},
+    ).status_code == 403
+    assert api.post("/api/cash", headers=headers, json={"kind": "IN", "amount": 1000, "note": "kirim"}).status_code == 403
+    assert api.post("/api/expenses", headers=headers, json={"category": "Boshqa", "amount": 100, "note": "x"}).status_code == 403
+
+    patched = api.patch(
+        f"/api/stores/{store_a}",
+        headers=headers,
+        json={"name": "A-Dokon", "username": "storekirim", "password": "secret12", "phone": "", "address": ""},
+    )
+    assert patched.status_code == 200, patched.text
+    _tok, su, sh = _login(api, "storekirim")
+    assert su["role"] == "STORE"
+    sin = api.post(
+        "/api/stock-ins",
+        headers=sh,
+        json={"supplier": "Taminot", "note": "", "items": [{"product_id": pid, "qty": 2, "buy_price": 1000}]},
+    )
+    assert sin.status_code == 200, sin.text
+
+
+def test_empty_barcode_autogen(client):
+    api, Session = client
+    _seed_owner(Session, username="barcowner")
+    _token, user, headers = _login(api, "barcowner")
+    store_a = user["store_id"]
+    patched = api.patch(
+        f"/api/stores/{store_a}",
+        headers=headers,
+        json={"name": "A-Dokon", "username": "storebarc", "password": "secret12", "phone": "", "address": ""},
+    )
+    assert patched.status_code == 200, patched.text
+    _tok, _su, sh = _login(api, "storebarc")
+    r = api.post(
+        "/api/products",
+        headers=sh,
+        json={"name": "Avto Tovar", "barcode": "", "buy_price": 100, "sell_price": 200, "stock": 1},
+    )
+    assert r.status_code == 200, r.text
+    code = r.json()["barcode"]
+    assert len(code) == 13
+    dup = api.post(
+        "/api/products",
+        headers=sh,
+        json={"name": "Avto Tovar 2", "barcode": code, "buy_price": 100, "sell_price": 200, "stock": 1},
+    )
+    assert dup.status_code == 409
+
+
+def test_owner_change_password_then_login(client):
+    api, Session = client
+    _seed_owner(Session, username="pwowner", password="secret12")
+    _token, _user, headers = _login(api, "pwowner", "secret12")
+    res = api.post(
+        "/api/auth/change-password",
+        headers=headers,
+        json={"current_password": "secret12", "new_password": "newpass99"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True}
+    bad = api.post("/api/auth/login", json={"username": "pwowner", "password": "secret12"})
+    assert bad.status_code == 401
+    _t2, user2, _h2 = _login(api, "pwowner", "newpass99")
+    assert user2["username"] == "pwowner"
+

@@ -9,7 +9,7 @@ from jose import JWTError, jwt
 
 from .config import settings
 
-ROLES = ("OWNER", "ADMIN", "MANAGER", "CASHIER", "WAREHOUSE")
+ROLES = ("OWNER", "ADMIN", "MANAGER", "CASHIER", "WAREHOUSE", "STORE")
 
 ROLE_PERMS = {
     "OWNER": {"pos", "products", "stock", "cash", "reports", "staff", "settings", "customers", "stores", "suppliers", "billing"},
@@ -17,18 +17,50 @@ ROLE_PERMS = {
     "MANAGER": {"pos", "products", "stock", "cash", "reports", "customers", "suppliers"},
     "CASHIER": {"pos", "cash", "customers"},
     "WAREHOUSE": {"products", "stock", "suppliers"},
+    "STORE": {"pos", "products", "stock", "cash", "reports", "customers", "suppliers"},
 }
 
+# In-memory, per-process only. Multi-instance production does not share counters.
+# Do not trust X-Forwarded-For (trivial spoof). Callers must pass TCP peer / stable ids.
 _rate: dict[str, list[float]] = {}
+_MAX_KEY_LEN = 128
+_MAX_BUCKETS = 20000
+
+
+def _norm_rate_key(key: str) -> str:
+    s = "".join(ch for ch in str(key or "") if ch.isprintable() and ch not in "\r\n")
+    s = " ".join(s.split()).strip().lower()
+    if not s:
+        s = "unknown"
+    if len(s) > _MAX_KEY_LEN:
+        s = hashlib.sha256(s.encode("utf-8", "ignore")).hexdigest()[:40]
+    return s
+
+
+def client_host(request) -> str:
+    host = request.client.host if request is not None and request.client else "x"
+    return _norm_rate_key(host)
 
 
 def rate_limit(key: str, limit: int = 8, window: int = 60) -> None:
+    limit = max(int(limit or 1), 1)
+    window = max(int(window or 1), 1)
+    key = _norm_rate_key(key)
     now = time.time()
     hits = [t for t in _rate.get(key, []) if now - t < window]
     if len(hits) >= limit:
+        _rate[key] = hits
         raise HTTPException(429, "Juda ko'p urinish. Biroz kuting.")
     hits.append(now)
     _rate[key] = hits
+    if len(_rate) > _MAX_BUCKETS:
+        stale = [k for k, v in list(_rate.items()) if not v or now - v[-1] >= 3600]
+        for k in stale:
+            _rate.pop(k, None)
+        if len(_rate) > _MAX_BUCKETS:
+            oldest = sorted(_rate.items(), key=lambda kv: kv[1][-1] if kv[1] else 0)
+            for k, _ in oldest[: max(1, len(_rate) - _MAX_BUCKETS)]:
+                _rate.pop(k, None)
 
 
 def hash_password(raw: str) -> str:

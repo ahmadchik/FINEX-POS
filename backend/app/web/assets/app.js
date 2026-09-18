@@ -1,4 +1,4 @@
-import { applyTheme, bindSaas, bindThemeToggle, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t, themeToggleHtml } from "./saas.js?v=theme2";
+import { applyTheme, bindSaas, bindThemeToggle, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t, themeToggleHtml } from "./saas.js?v=cab1";
 import { rememberApiError, syncFinexAi } from "./ai.js?v=aiux3";
 
 const root = document.getElementById("root");
@@ -68,6 +68,23 @@ async function api(path, opts = {}) {
 
 function can(perm) {
   return (user()?.permissions || []).includes(perm);
+}
+
+function isCompanyCabinet() {
+  const u = user();
+  if (!u) return false;
+  if (u.cabinet) return u.cabinet === "company";
+  return u.role === "OWNER" || u.role === "ADMIN";
+}
+
+function ean13Check(d12) {
+  let s = 0;
+  for (let i = 0; i < 12; i++) s += Number(d12[i]) * (i % 2 === 0 ? 1 : 3);
+  return d12 + String((10 - (s % 10)) % 10);
+}
+function makeBarcode() {
+  let body = "200" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0");
+  return ean13Check(body);
 }
 
 function nav() {
@@ -204,10 +221,11 @@ function shell(inner) {
     ["stores", t("stores"), "stores"],
     ["staff", t("staff"), "staff"],
     ["settings", t("settings"), "settings"],
-  ].filter((i) => !i[2] || can(i[2]));
+  ].filter((i) => !i[2] || can(i[2]))
+    .filter((i) => isCompanyCabinet() || !["stores", "settings", "staff", "transfers"].includes(i[0]));
   const stores = (u.stores || []).filter((s) => s.is_active !== false);
   const storeSel =
-    stores.length > 1
+    isCompanyCabinet() && stores.length > 1
       ? `<select class="field" id="store-switch" style="margin:8px 0">${stores
           .map((s) => `<option value="${s.id}" ${s.id === u.store_id ? "selected" : ""}>${esc(s.name)}</option>`)
           .join("")}</select>`
@@ -407,7 +425,10 @@ async function pageProducts() {
       <input type="hidden" name="id" />
       <div class="grid3" style="margin-top:0">
         <input class="field" name="name" placeholder="Nomi" required />
-        <input class="field" name="barcode" placeholder="Barcode" required />
+        <div style="display:flex;gap:6px;align-items:center">
+          <input class="field" name="barcode" placeholder="Barcode" style="flex:1" />
+          <button type="button" class="btn btn-ghost" id="p-barcode-auto">Avto</button>
+        </div>
         <input class="field" name="sku" placeholder="SKU" />
         <input class="field" name="sell_price" type="number" step="0.01" min="0" placeholder="Sotuv narxi" required />
         <input class="field" name="buy_price" type="number" step="0.01" min="0" placeholder="Xarid narxi" />
@@ -482,7 +503,7 @@ async function pageStock() {
     .join("");
   return `
     <h2>Kirim</h2>
-    <form id="in-form" class="card">
+${isCompanyCabinet() ? "" : `    <form id="in-form" class="card">
       <div class="grid3" style="margin-top:0">
         <input class="field" name="supplier" placeholder="Yetkazib beruvchi" />
         <input class="field" name="note" placeholder="Izoh" />
@@ -502,7 +523,7 @@ async function pageStock() {
       </div>
       <p id="in-form-err" class="err" hidden></p>
       <button class="btn btn-gold" style="margin-top:10px" type="submit">Kirim qilish</button>
-    </form>
+    </form>`}
     <div id="in-lines" class="stock-draft"></div>
     <h3>Tarix</h3>
     <table class="table">
@@ -657,6 +678,8 @@ async function pagePos() {
           <label class="check"><input type="checkbox" id="credit" /> Qarzga</label>
         </div>
         <p>Jami: <b id="total">0 so'm</b></p>
+        <p class="muted" id="pos-tax" hidden></p>
+        <p class="muted" style="font-size:12px">F2 to‘lov · Esc qidiruv · F4 naqd</p>
         <div class="grid3">
           <input class="field" id="cash" type="number" placeholder="Naqd" />
           <input class="field" id="card" type="number" placeholder="Karta" />
@@ -669,11 +692,19 @@ async function pagePos() {
     </div>`;
 }
 
+function vatIncluded(total, vat) {
+  const v = Number(vat || 0);
+  const t = Number(total || 0);
+  if (!(v > 0) || !(t > 0)) return 0;
+  return Math.round((t * v) / (100 + v) * 100) / 100;
+}
 function posTotals() {
   const state = window.__pos;
   const subtotal = (state?.cart || []).reduce((s, i) => s + i.qty * i.price, 0);
-  const discount = Number(document.getElementById("discount")?.value || 0);
-  return { subtotal, discount, total: Math.max(0, subtotal - discount) };
+  const discount = Math.max(0, Number(document.getElementById("discount")?.value || 0));
+  const total = Math.max(0, subtotal - discount);
+  const tax = vatIncluded(total, user()?.vat_percent);
+  return { subtotal, discount, total, tax };
 }
 
 function drawPos() {
@@ -716,8 +747,19 @@ function drawPos() {
         )
         .join("") || "<p class='muted'>Savat bo‘sh</p>";
   }
+  const tot = posTotals();
   const t = document.getElementById("total");
-  if (t) t.textContent = money(posTotals().total);
+  if (t) t.textContent = money(tot.total);
+  const taxEl = document.getElementById("pos-tax");
+  if (taxEl) {
+    if (tot.tax > 0) {
+      taxEl.hidden = false;
+      taxEl.textContent = "QQS (narxga kiritilgan): " + money(tot.tax);
+    } else {
+      taxEl.hidden = true;
+      taxEl.textContent = "";
+    }
+  }
   updatePayHints();
 }
 
@@ -774,6 +816,8 @@ function showReceipt(sale) {
         <div class="line"><span>Oraliq</span><span>${money(sale.subtotal)}</span></div>
         ${sale.discount ? `<div class="line"><span>Chegirma</span><span>-${money(sale.discount)}</span></div>` : ""}
         <div class="line"><b>Jami</b><b>${money(sale.total)}</b></div>
+        ${Number(sale.tax_total) > 0 ? `<div class="line"><span>QQS (kiritilgan)</span><span>${money(sale.tax_total)}</span></div>` : ""}
+        <div class="line"><span>To‘lov</span><span>${esc(sale.payment_type || "")}</span></div>
         <div class="line"><span>Naqd</span><span>${money(sale.paid_cash)}</span></div>
         ${sale.paid_card ? `<div class="line"><span>Karta</span><span>${money(sale.paid_card)}</span></div>` : ""}
         ${sale.paid_online ? `<div class="line"><span>Online</span><span>${money(sale.paid_online)}</span></div>` : ""}
@@ -1121,7 +1165,7 @@ async function pageCash() {
       <div class="card kpi-card"><div class="kpi-head"><span>Karta (Terminal)</span></div><b>${money(d.card || 0)}</b></div>
       <div class="card kpi-card"><div class="kpi-head"><span>Jami</span></div><b>${money(((d.cash ?? d.balance) || 0) + (d.card || 0))}</b></div>
     </div>
-    <form id="cash-form" class="card" style="margin-bottom:12px">
+${isCompanyCabinet() ? "" : `    <form id="cash-form" class="card" style="margin-bottom:12px">
       <div class="grid3" style="margin-top:0">
         <select class="field" name="kind" required>
           <option value="IN">Kirim</option>
@@ -1132,7 +1176,7 @@ async function pageCash() {
       </div>
       <button class="btn btn-gold" style="margin-top:10px" type="submit">Saqlash</button>
       <div class="err" id="cash-err" style="margin-top:10px"></div>
-    </form>
+    </form>`}
     <table class="table" id="cash-table">
       <thead>
         <tr><th>Sana / vaqt</th><th>Holat</th><th>Summa</th><th>Izoh / chek</th></tr>
@@ -1162,7 +1206,7 @@ async function pageExpenses() {
   const rows = await api("/api/expenses");
   return `
     <h2>Xarajatlar</h2>
-    <form id="ex-form" class="card" style="margin-bottom:12px">
+${isCompanyCabinet() ? "" : `    <form id="ex-form" class="card" style="margin-bottom:12px">
       <div class="grid3" style="margin-top:0">
         <select class="field" name="category" required>
           ${EXPENSE_CATS.map((c) => `<option value="${c}">${c}</option>`).join("")}
@@ -1172,7 +1216,7 @@ async function pageExpenses() {
         <button class="btn btn-gold" type="submit">Yozish</button>
       </div>
       <div class="err" id="ex-err" style="margin-top:10px"></div>
-    </form>
+    </form>`}
     <table class="table">
       <thead><tr><th>Sana</th><th>Kategoriya</th><th>Summa</th><th>Izoh</th></tr></thead>
       <tbody>
@@ -1348,6 +1392,12 @@ function payMethodLabel(m) {
   return m;
 }
 
+function billingRequisites(accountId, plan) {
+  const id = accountId ?? "";
+  const p = plan || "PRO";
+  return `ТЎЛОВ РЕКВИЗИТЛАРИ: "URGUT-INOVATSION" MCHJ, СИТР: 309706996, ҳисоб рақам: 20208000905546514002, МФО: 01183, "ANOR BANK" АКЦИЯДОРЛИК ЖАМИЯТИ, (тўлов мақсади: Оммавий оферта шартномасига асосан ID: ${id} учун ${p} тариф бўйича абонент тўлови кўчирилди)`;
+}
+
 function renderBilling(b) {
   const rows = b.payments || [];
   const body = rows.length
@@ -1403,9 +1453,9 @@ function renderBilling(b) {
             <option value="ENTERPRISE">ENTERPRISE</option>
             <option value="VIP">VIP</option>
           </select>
-          <button type="button" class="btn btn-gold" data-paym="click">Click</button>
-          <button type="button" class="btn btn-gold" data-paym="payme">Payme</button>
-          <button type="button" class="btn btn-ghost" data-paym="demo">Demo to‘lov</button>
+        </div>
+        <div class="card" id="bill-requisites" data-account-id="${esc(b.account_id)}" style="margin-top:12px">
+          <pre class="muted" style="white-space:pre-wrap;margin:0">${esc(billingRequisites(b.account_id, b.plan))}</pre>
         </div>
       </div>
       <div class="card bill-table-card">
@@ -1443,6 +1493,18 @@ async function pageSettings() {
   const v = (k) => esc(init[k] || "");
   return `
     <h2>Sozlamalar</h2>
+    <div class="card">
+      <h3>Kassir kompyuteri</h3>
+      <p class="muted">Brauzer .exe/.zip ni bloklaydi. Yorliqni shu yerda yaratamiz.</p>
+      <p><button type="button" id="kiosk-copy" class="btn btn-gold">Yorliq skriptini nusxalash</button></p>
+      <ol class="muted">
+        <li>Win+R → powershell → Enter</li>
+        <li>O'ng tugma bilan joylashtiring (Ctrl+V) → Enter</li>
+        <li>Ish stolida FIXEN POS chiqadi</li>
+      </ol>
+      <p class="muted">Edge/Chrome da: ⋮ → Ilovani o'rnatish / Install this site as an app</p>
+      <p class="muted" style="font-size:smaller">Agar oldingi yuklama bloklansa, yuklamalar belgisida strelka → Keep anyway.</p>
+    </div>
     ${renderBilling(billing)}
     <h3 class="set-sub">Do‘kon ma’lumotlari</h3>
     <form id="set-form" class="card">
@@ -1486,6 +1548,24 @@ async function pageSettings() {
         </div>
       </div>
       <div id="set-msg"></div>
+    </form>
+    <h3 class="set-sub">Parol</h3>
+    <form id="pw-form" class="card">
+      <div class="set-grid">
+        <label class="set-field">Joriy parol
+          <input class="field" type="password" name="current_password" required autocomplete="current-password" />
+        </label>
+        <label class="set-field">Yangi parol
+          <input class="field" type="password" name="new_password" required minlength="6" autocomplete="new-password" />
+        </label>
+        <label class="set-field">Yangi parol (takror)
+          <input class="field" type="password" name="new_password2" required minlength="6" autocomplete="new-password" />
+        </label>
+        <div class="set-span-2">
+          <button class="btn btn-gold" type="submit">Parolni saqlash</button>
+        </div>
+      </div>
+      <div id="pw-msg"></div>
     </form>`;
 }
 
@@ -1974,18 +2054,24 @@ function bindApp(page) {
 
   const pForm = document.getElementById("p-form");
   if (pForm) {
+    document.getElementById("p-barcode-auto")?.addEventListener("click", () => {
+      if (pForm.barcode) pForm.barcode.value = makeBarcode();
+    });
     pForm.onsubmit = async (e) => {
       e.preventDefault();
       const err = document.getElementById("p-err");
       if (err) err.textContent = "";
       const f = Object.fromEntries(new FormData(pForm).entries());
       const name = (f.name || "").trim();
-      const barcode = (f.barcode || "").trim();
+      let barcode = (f.barcode || "").trim();
+      if (!barcode) {
+        barcode = makeBarcode();
+        if (pForm.barcode) pForm.barcode.value = barcode;
+      }
       const sell = Number(f.sell_price);
       const buy = Number(f.buy_price || 0);
       const missing = [];
       if (!name) missing.push("Nomi");
-      if (!barcode) missing.push("Barcode");
       if (f.sell_price === undefined || f.sell_price === "") missing.push("Sotuv narxi");
       if (missing.length) {
         if (err) err.textContent = "Majburiy: " + missing.join(", ");
@@ -2373,6 +2459,14 @@ function bindApp(page) {
     });
   }
 
+  document.getElementById("kiosk-copy")?.addEventListener("click", async () => {
+    const r = await fetch("/assets/kiosk/create-shortcut.txt");
+    const t = await r.text();
+    await navigator.clipboard.writeText(t);
+    const b = document.getElementById("kiosk-copy");
+    if (b) { const old = b.textContent; b.textContent = "Nusxa olindi"; setTimeout(() => { b.textContent = old; }, 2000); }
+  });
+
   const setForm = document.getElementById("set-form");
   if (setForm) {
     const inn = document.getElementById("set-inn");
@@ -2400,20 +2494,35 @@ function bindApp(page) {
         if (msg) msg.innerHTML = `<p class="err">${esc(ex.message)}</p>`;
       }
     };
-    document.querySelectorAll("[data-paym]").forEach((b) => {
-      b.onclick = async () => {
-        const plan = document.getElementById("bill-plan")?.value || "PRO";
-        const data = await api("/api/billing/checkout", { method: "POST", body: JSON.stringify({ plan, method: b.dataset.paym === "demo" ? "click" : b.dataset.paym }) });
-        if (b.dataset.paym === "demo" || data.demo) {
-          await api("/api/billing/demo-pay/" + data.payment_id + "/confirm", { method: "POST", body: "{}" });
-          const me = await api("/api/auth/me");
-          setAuth({ access: token(), user: { ...user(), ...me } });
-          render();
-        } else if (data.url) {
-          window.open(data.url, "_blank");
-        }
+    const billPlan = document.getElementById("bill-plan");
+    if (billPlan) {
+      billPlan.onchange = () => {
+        const box = document.querySelector("#bill-requisites pre");
+        const acc = document.getElementById("bill-requisites")?.dataset.accountId;
+        if (box) box.textContent = billingRequisites(acc, billPlan.value);
       };
-    });
+    }
+  }
+
+  const pwForm = document.getElementById("pw-form");
+  if (pwForm) {
+    pwForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById("pw-msg");
+      if (msg) msg.innerHTML = "";
+      const f = Object.fromEntries(new FormData(pwForm).entries());
+      if (f.new_password !== f.new_password2) {
+        if (msg) msg.innerHTML = '<p class="err">Parollar mos emas</p>';
+        return;
+      }
+      try {
+        await api("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current_password: f.current_password, new_password: f.new_password }) });
+        if (msg) msg.innerHTML = '<p class="ok">Saqlandi</p>';
+        pwForm.reset();
+      } catch (ex) {
+        if (msg) msg.innerHTML = `<p class="err">${esc(ex.message)}</p>`;
+      }
+    };
   }
 
   bindSales();
@@ -2459,16 +2568,50 @@ function bindApp(page) {
       const plus = e.target.closest("[data-plus]");
       const minus = e.target.closest("[data-minus]");
       const del = e.target.closest("[data-del]");
-      if (plus) window.__pos.cart[Number(plus.dataset.plus)].qty += 1;
+      if (plus) {
+        const i = Number(plus.dataset.plus);
+        const line = window.__pos.cart[i];
+        const p = window.__pos.products.find((x) => x.id === line.product_id);
+        if (p && line.qty + 1 > Number(p.stock || 0) + 1e-9) {
+          const msg = document.getElementById("pos-msg");
+          if (msg) msg.innerHTML = `<p class="err">Qoldiq yetarli emas (${p.stock})</p>`;
+        } else {
+          line.qty += 1;
+          window.__pos.idem = null;
+        }
+      }
       if (minus) {
         const i = Number(minus.dataset.minus);
         window.__pos.cart[i].qty -= 1;
         if (window.__pos.cart[i].qty <= 0) window.__pos.cart.splice(i, 1);
+        window.__pos.idem = null;
       }
-      if (del) window.__pos.cart.splice(Number(del.dataset.del), 1);
+      if (del) {
+        window.__pos.cart.splice(Number(del.dataset.del), 1);
+        window.__pos.idem = null;
+      }
       drawPos();
     });
     document.getElementById("pay")?.addEventListener("click", payNow);
+    if (window.__posKeys) window.removeEventListener("keydown", window.__posKeys);
+    window.__posKeys = (e) => {
+      if (!document.getElementById("pay")) return;
+      if (e.key === "F2") {
+        e.preventDefault();
+        payNow();
+      } else if (e.key === "F4") {
+        e.preventDefault();
+        document.getElementById("cash")?.focus();
+      } else if (e.key === "Escape") {
+        const s = document.getElementById("scan");
+        if (s) {
+          s.value = "";
+          drawPos();
+          s.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", window.__posKeys);
     document.getElementById("shift-open")?.addEventListener("click", async () => {
       await api("/api/shifts/open", { method: "POST", body: JSON.stringify({ opening_cash: Number(document.getElementById("shift-open-cash")?.value || 0) }) });
       render();
@@ -2484,25 +2627,38 @@ function addCart(id) {
   const p = window.__pos.products.find((x) => x.id === id);
   if (!p) return;
   const line = window.__pos.cart.find((x) => x.product_id === id);
+  const next = (line ? line.qty : 0) + 1;
+  if (next > Number(p.stock || 0) + 1e-9) {
+    const msg = document.getElementById("pos-msg");
+    if (msg) msg.innerHTML = `<p class="err">Qoldiq yetarli emas (${p.stock})</p>`;
+    return;
+  }
   if (line) line.qty += 1;
   else window.__pos.cart.push({ product_id: id, name: p.name, qty: 1, price: p.sell_price });
+  if (window.__pos) window.__pos.idem = null;
   drawPos();
 }
 
 async function payNow() {
   const msg = document.getElementById("pos-msg");
+  const payBtn = document.getElementById("pay");
+  if (window.__pos?.paying) return;
+  if (window.__pos) window.__pos.paying = true;
+  if (payBtn) payBtn.disabled = true;
   try {
     if (!window.__pos.cart.length) throw new Error("Savat bo‘sh");
     const { total } = posTotals();
-    const discount = Number(document.getElementById("discount").value || 0);
+    const discount = Math.max(0, Number(document.getElementById("discount").value || 0));
     let cash = Number(document.getElementById("cash").value || 0);
     const card = Number(document.getElementById("card").value || 0);
     const online = Number(document.getElementById("online").value || 0);
+    if (cash < 0 || card < 0 || online < 0) throw new Error("To‘lov manfiy bo‘lmasin");
     const customerId = Number(document.getElementById("customer").value || 0) || null;
     const allowCredit = document.getElementById("credit").checked;
     if (allowCredit && !customerId) throw new Error("Qarzga savdo uchun mijoz tanlang");
     if (!cash && !card && !online && !allowCredit) cash = total;
     const type = online && (cash || card) ? "MIXED" : online ? "ONLINE" : card && cash ? "MIXED" : card ? "CARD" : allowCredit && cash + card + online < total ? "CREDIT" : "CASH";
+    if (!window.__pos.idem) window.__pos.idem = "pos-" + Date.now() + "-" + Math.random().toString(16).slice(2);
     const sale = await api("/api/pos/sale", {
       method: "POST",
       body: JSON.stringify({
@@ -2514,12 +2670,13 @@ async function payNow() {
         payment_type: type,
         customer_id: customerId,
         allow_credit: allowCredit,
-        idempotency_key: "pos-" + Date.now() + "-" + Math.random().toString(16).slice(2),
+        idempotency_key: window.__pos.idem,
       }),
     });
     msg.innerHTML = `<p class="ok">${esc(sale.number)} · ${money(sale.total)}</p>`;
     showReceipt(sale);
     window.__pos.cart = [];
+    window.__pos.idem = null;
     document.getElementById("cash").value = "";
     document.getElementById("card").value = "";
     document.getElementById("online").value = "";
@@ -2530,6 +2687,9 @@ async function payNow() {
     drawPos();
   } catch (e) {
     msg.innerHTML = `<p class="err">${esc(e.message)}</p>`;
+  } finally {
+    if (window.__pos) window.__pos.paying = false;
+    if (payBtn) payBtn.disabled = false;
   }
 }
 

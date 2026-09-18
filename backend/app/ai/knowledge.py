@@ -42,7 +42,7 @@ ARTICLES: list[dict] = [
             "Menyudan **POS** ni oching. Qidirish/barcode maydoniga yozing yoki skanerlang, tovarni bosing — savatga tushadi.\n"
             "Miqdor, chegirma, mijoz (ixtiyoriy), naqd/karta/Click-Payme summalarini kiriting. **To'lov**.\n"
             "Qarzga savdo: mijoz tanlang + 'Qarzga' belgilang.\n"
-            "Obuna tugagan bo'lsa savdo yopiladi (402) — Sozlamalar/Billing.\n"
+            "Obuna tugagan bo'lsa savdo yopiladi (402) — Sozlamalar → bank rekvizitlari.\n"
             "Kassir smena ochiq bo'lishi kerak: 'Avval kassa smenasini oching'.\n"
             "Qoldiq yetmasa: '{nom}: qoldiq yetarli emas' — avval **Kirim** qiling."
         ),
@@ -139,12 +139,14 @@ ARTICLES: list[dict] = [
     {
         "id": "settings-billing",
         "pages": ["settings"],
-        "tags": ["sozlama", "billing", "tarif", "obuna", "to'lov", "click", "payme"],
+        "tags": ["sozlama", "tarif", "obuna", "to'lov", "rekvizit", "bank"],
         "title": "Sozlamalar va obuna",
         "body": (
             "Sozlamalar: kompaniya nomi, valyuta, QQS, til.\n"
-            "Billing: FREE 30 kun, PRO / ENTERPRISE / VIP. Click/Payme yoki Demo to'lov.\n"
-            "Obuna tugasa savdo 402: 'Obuna tugagan. Billing orqali to'lang.' — Sozlamalar pastidagi Billing."
+            "Obuna/tarif: Sozlamalar sahifasida tarifni tanlang (PRO / ENTERPRISE / VIP). Click/Payme/Demo tugmalari YO'Q.\n"
+            "To'lov bank o'tkazmasi orqali: 'URGUT-INOVATSION' MCHJ, STIR: 309706996, hisob raqam: 20208000905546514002, MFO: 01183, 'ANOR BANK' AJ.\n"
+            "To'lov maqsadi: Ommaviy oferta shartnomasiga asosan ID: <Sozlamalardagi foydalanuvchi ID> uchun <tarif> tarif bo'yicha abonent to'lovi ko'chirildi.\n"
+            "To'lovdan keyin tarifni platforma yoqadi. FREE 30 kun sinov. Obuna tugasa savdo 402 — Sozlamalardagi rekvizitlar bo'yicha to'lang."
         ),
     },
     {
@@ -174,7 +176,7 @@ ARTICLES: list[dict] = [
 ERROR_HINTS: list[dict] = [
     {"match": "qoldiq yetarli emas", "hint": "Savatdagi miqdor ombordagi qoldiqdan katta. Tovarlar/Kirim orqali qoldiqni oshiring yoki savat miqdorini kamaytiring."},
     {"match": "Avval kassa smenasini oching", "hint": "POS tepasida smena yopiq. 'Smena ochish' ni bosing, keyin To'lov."},
-    {"match": "Obuna tugagan", "hint": "Sozlamalar → Billing. Tarif to'lang yoki demo to'lov. PAST_DUE/SUSPENDED da savdo yozilmaydi."},
+    {"match": "Obuna tugagan", "hint": "Sozlamalar → tarif tanlang, bank rekvizitlari bo'yicha o'tkazma, ID ni to'lov maqsadiga yozing. PAST_DUE/SUSPENDED da savdo yozilmaydi."},
     {"match": "Savat bo'sh", "hint": "Avval barcode/qidiruvdan tovar qo'shing, keyin To'lov."},
     {"match": "To'lov summasi yetarli emas", "hint": "Naqd+karta+online jami (qarzga bo'lmasa) chek summasidan kam. Summalarni to'ldiring yoki Qarzga ni belgilang."},
     {"match": "Mijoz kredit limiti oshdi", "hint": "Mijozlar da kredit limitini oshiring yoki qarzni undiring, yoki qarzga savdoni olib tashlang."},
@@ -186,7 +188,7 @@ ERROR_HINTS: list[dict] = [
     {"match": "Authentication required", "hint": "Qayta kiring. Token muddati tugagan bo'lishi mumkin (JWT soatlar cheklangan)."},
     {"match": "Login yoki parol noto'g'ri", "hint": "Login/parolni tekshiring. Platform egasi #/platform dan boshqa forma."},
     {"match": "Juda ko'p urinish", "hint": "Rate limit. Biroz kuting, keyin qayta urinib ko'ring."},
-    {"match": "Tarif limiti", "hint": "Do'kon yoki xodim soni tarifga to'lgan. Billingdan tarifni yangilang."},
+    {"match": "Tarif limiti", "hint": "Do'kon yoki xodim soni tarifga to'lgan. Sozlamalar → tarif + bank o'tkazmasi."},
 ]
 
 

@@ -12,7 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .deps import current_store, require_perm
+from .deps import current_store, forbid_company_kirim_write, require_perm
 from .ledger import move_stock
 from .models import CashTxn, Expense, Product, Sale, SaleItem, StockIn, StockInItem, Store, User
 from .plans import plan_of, refresh_company_status
@@ -30,6 +30,7 @@ def create_stock_in(
     user: User = Depends(require_perm("stock")),
     db: Session = Depends(get_db),
 ):
+    forbid_company_kirim_write(user)
     if not body.items:
         raise HTTPException(400, "Qatorlar yo'q")
     store = current_store(user, db)
@@ -163,6 +164,7 @@ def add_cash(
     user: User = Depends(require_perm("cash")),
     db: Session = Depends(get_db),
 ):
+    forbid_company_kirim_write(user)
     kind = (body.kind or "").upper()
     if kind not in ("IN", "OUT"):
         raise HTTPException(400, "Kirim yoki Chiqim tanlang")
@@ -208,8 +210,12 @@ def dashboard(user: User = Depends(require_perm("reports")), db: Session = Depen
         )
 
     def agg(since: datetime):
-        q = db.query(func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id)).filter(*sale_filter(since))
-        total, count = q.first()
+        q = db.query(
+            func.coalesce(func.sum(Sale.total), 0),
+            func.count(Sale.id),
+            func.coalesce(func.sum(Sale.tax_total), 0),
+        ).filter(*sale_filter(since))
+        total, count, tax = q.first()
         sold = (
             db.query(func.coalesce(func.sum(SaleItem.qty), 0))
             .join(Sale, SaleItem.sale_id == Sale.id)
@@ -233,6 +239,7 @@ def dashboard(user: User = Depends(require_perm("reports")), db: Session = Depen
         profit = sum(totals[sid] - cogs[sid] for sid in totals)
         return {
             "sales": round(float(total or 0), 2),
+            "tax": round(float(tax or 0), 2),
             "checks": int(count or 0),
             "sold_qty": float(sold or 0),
             "profit": round(float(profit or 0), 2),
@@ -637,6 +644,8 @@ def create_staff(
     db: Session = Depends(get_db),
 ):
     role = body.role.upper()
+    if role == "STORE":
+        raise HTTPException(400, "Do'kon loginini Do'konlar modulidan bering")
     if role not in ROLES:
         raise HTTPException(400, "Noto'g'ri rol")
     from .models import Company
