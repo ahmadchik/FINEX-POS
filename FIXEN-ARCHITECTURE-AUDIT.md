@@ -1,5 +1,9 @@
 # FIXEN POS Architecture Audit
 
+## Phase 2 Step 6F follow-up (2026-09-19)
+
+Stock opname **cancel**: `POST /api/stock-opnames/{id}/cancel`. OPEN→CANCELLED document-only. No `move_stock`. Lines preserved. Tests: `backend/tests/test_phase2_opname_cancel.py`.
+
 ## Phase 2 Step 6D follow-up (2026-09-19)
 
 Stock opname **finalize**: `POST /api/stock-opnames/{id}/finalize`. Atomic OPEN→POSTED via existing `move_stock(kind=ADJUST, ref_type=opname)`. Live stock + snapshot difference. Full rollback on any line failure. UI «Санашни якунлаш». Tests: `backend/tests/test_phase2_opname_finalize.py`. Do not start cancel.
@@ -76,7 +80,7 @@ FIXEN POS is a **FastAPI monolith** that serves a **vanilla JS SPA** from `backe
 
 The product vision is an AI-powered retail operating system. The **live system is a working Core POS + partial Business + early Intelligence**. It is not yet omnichannel, not variant-aware, not PostgreSQL-migrated, and not a full AI business assistant.
 
-**Architecture compliance score: 84 / 100**. Phase 0 + HIGH + Phase 1. Phase 2 Steps 1–6D: product master, ledger, ADJUST, transfer, opname OPEN+UI+finalize. Remaining: opname cancel, write-off, warehouse, variants.
+**Architecture compliance score: 85 / 100**. Phase 0 + HIGH + Phase 1. Phase 2 Steps 1–6F: product master, ledger, ADJUST, transfer, opname OPEN+UI+finalize+cancel. Remaining: write-off, warehouse, variants.
 
 Phase 0 + HIGH closed previous CRITICAL/HIGH security items. Remaining: incomplete audit coverage, SQLite, GET demo-pay read (no activate).
 
@@ -127,7 +131,7 @@ Legend: **EXISTS** | **PARTIAL** | **MISSING** | **PLANNED** (vision only) | **U
 | 1 | POS / Sales | EXISTS | `routers_pos.py`, `#/app/pos` |
 | 2 | Products | PARTIAL | CRUD + barcode; no variants/brand/image/wholesale as first-class |
 | 3 | Barcode | EXISTS | scan UI, autogen EAN-13, JsBarcode cennik |
-| 4 | Inventory | PARTIAL | IN/SALE/RETURN/TRANSFER/ADJUST + opname finalize (6D); no cancel/write-off/warehouse |
+| 4 | Inventory | PARTIAL | IN/SALE/RETURN/TRANSFER/ADJUST + opname finalize/cancel (6F); no write-off/warehouse |
 | 5 | Payments | PARTIAL | cash/card/online/credit fields; no retail PSP |
 | 6 | Returns | PARTIAL | full/partial return; no exchange |
 | 7 | CRM | PARTIAL | profile, debt, ledger, sales; no loyalty/360 extras |
@@ -577,7 +581,7 @@ Do not mix these four buckets.
 - Monolithic routers (`routers_saas.py` ~37KB, `routers_ops.py` ~26KB, `app.js` ~109KB)
 - SPA full-page innerHTML rerenders
 - SQLite `ensure_schema` instead of migrations
-- Stock PATCH uses ledger ADJUST (Phase 0); opname finalize via `move_stock` ADJUST (6D); cancel/write-off still missing
+- Stock PATCH uses ledger ADJUST (Phase 0); opname finalize via `move_stock` ADJUST (6D); cancel is document-only (6F); write-off still missing
 - Unversioned API
 - STORE role vs documented RBAC
 - Username global unique
@@ -633,7 +637,7 @@ The **vision** order puts Multi-store at PHASE 7. **This codebase already has Mu
 
 ## 19. Architecture Compliance Score
 
-**Score: 84 / 100** (was 83 after Step 6C, 82 after Step 6B, 81 after Step 6A, 80 after Step 5)
+**Score: 85 / 100** (was 84 after Step 6D, 83 after Step 6C, 82 after Step 6B, 81 after Step 6A)
 
 Technical alignment with master architecture only.
 
@@ -644,7 +648,7 @@ Technical alignment with master architecture only.
 | Tenant isolation | 78 | Filters exist; billing holes |
 | RBAC | 70 | Works; STORE delta; stale JWT claims |
 | POS checkout integrity | 82 | Inclusive QQS on sale/receipt/dashboard; cashier discount cap; idempotency |
-| Inventory auditability | 82 | ADJUST + transfer + opname finalize (6D); cancel/write-off still missing |
+| Inventory auditability | 84 | ADJUST + transfer + opname finalize/cancel (6F); write-off still missing |
 | CRM 360 | 48 | Debt yes; loyalty no |
 | Payments architecture | 42 | Fields yes; integration layer weak |
 | API design | 60 | REST+RBAC; unversioned; fat routers |

@@ -1,10 +1,10 @@
 # FIXEN POS — Phase 2 Products + Inventory Architecture
 
-**Status:** STEP 1–6D implemented (product master, ledger, ADJUST, transfer, opname DB + OPEN API + UI + **finalize**)  
+**Status:** STEP 1–6F implemented (product master, ledger, ADJUST, transfer, opname DB + OPEN API + UI + finalize + **cancel**)  
 **Date:** 2026-09-19  
-**Git HEAD (inspected):** `1cc862d34b0d4ca66cd9a894b640ae095c67ed37` (`main`)  
-**Steps 2–6D code:** uncommitted (do not auto-start Step 6E / cancel)  
-**Baseline tests before Step 6D:** 141 passed / 0 failed  
+**Git HEAD (inspected):** `65a6a55cb87f31a10e79cbff2a7a4e12472bbceb` (`main`)  
+**Step 6F code:** uncommitted (do not auto-commit)  
+**Baseline tests before Step 6F:** 157 passed / 0 failed  
 
 This document describes **what the code does today**, then proposes a **compatibility-first** path. It does not rewrite `FIXEN-MASTER-ARCHITECTURE.md`. Large items (product variants model, warehouse entity, UUID, Alembic, API versioning) require Ahmad’s explicit approval before implementation.
 
@@ -179,7 +179,7 @@ Example mapping for:
 | Movement history API / UI | MISSING |
 | Dedicated adjustment API + reason | EXISTS (`POST /api/stock-adjustments`, Step 4) |
 | Write-off | MISSING |
-| Stock opname | DB + OPEN API + UI + **finalize POSTED** (6A–6D); no cancel endpoint |
+| Stock opname | DB + OPEN API + UI + finalize + **cancel** (6A–6F) |
 | Transfer draft / receive / reject | MISSING (always `DONE`) |
 | Low-stock alerts (push/Telegram) | MISSING |
 | Critical vs min thresholds | MISSING (single `min_stock`) |
@@ -258,7 +258,7 @@ Transfer is already two ledger rows + one `stock_transfers` header in a **single
 
 ## 10. Stock Opname Architecture
 
-**Today (Step 6A–6D):** tables + OPEN API + SPA UI + **POST `/api/stock-opnames/{id}/finalize`**. Cancel endpoint still later.
+**Today (Step 6A–6F):** tables + OPEN API + SPA UI + finalize + **POST `/api/stock-opnames/{id}/cancel`**. Cancel is document-only (no stock writes).
 
 - Header is company/store scoped (`company_id`, `store_id`). No `warehouse_id`. No `variant_id`.
 - Statuses: `OPEN` | `POSTED` | `CANCELLED` (default `OPEN`).
@@ -275,7 +275,9 @@ Transfer is already two ledger rows + one `stock_transfers` header in a **single
 
 **Step 6D finalize:** `POST /api/stock-opnames/{id}/finalize`. OPEN only. All lines must have non-null `counted_qty` (>= 0). `difference = counted_qty - system_qty` (snapshot not re-taken). Apply `new_stock = current live Product.stock + difference` via `move_stock(kind=ADJUST, ref_type="opname", ref_id=opname.id)`. Zero difference skips `move_stock` but stores `line.difference = 0`. Negative resulting stock → 400 + full rollback. Atomic one commit; HQ `forbid_company_kirim_write`; CASHIER 403. Audit `stock.opname.finalize` only on success. UI: «Санашни якунлаш» on OPEN + stock perm, confirm, submit lock, reload POSTED read-only.
 
-**Not in 6D:** cancel endpoint, warehouse, variants, new ledger/kind.
+**Step 6F cancel:** `POST /api/stock-opnames/{id}/cancel`. OPEN→CANCELLED only. No `move_stock`, no line mutation. POSTED/CANCELLED → 409. UI «Санашни бекор қилиш».
+
+**Not in 6F:** warehouse, variants, new ledger/kind, concurrent finalize lock.
 
 ---
 
@@ -468,6 +470,18 @@ No master document was edited in this step.
 
 
 
+
+## Step 6F implementation status (2026-09-19)
+
+Implemented (**cancel only**; no stock writes):
+
+- `POST /api/stock-opnames/{id}/cancel` — same write gate as create/finalize (`stock` + `current_store` + `forbid_company_kirim_write`). Cross-company/other store → 404. CASHIER → 403. HQ OWNER/ADMIN → 403.
+- OPEN → CANCELLED only. POSTED/CANCELLED → 409. Lines kept as-is (`system_qty` / `counted_qty` / `difference`). `cancelled_at=now`. `posted_at` untouched.
+- Does **not** call `move_stock`, does **not** write `products.stock` or `stock_movements`.
+- Audit `stock.opname.cancel` only on successful commit.
+- UI: «Санашни бекор қилиш» on OPEN + writable; confirm; lock; reload CANCELLED read-only.
+
+Tests: `backend/tests/test_phase2_opname_cancel.py`.
 
 ## Step 6D implementation status (2026-09-19)
 

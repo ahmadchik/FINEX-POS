@@ -1,4 +1,4 @@
-import { applyTheme, bindSaas, bindThemeToggle, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t, themeToggleHtml } from "./saas.js?v=p2s6d";
+import { applyTheme, bindSaas, bindThemeToggle, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t, themeToggleHtml } from "./saas.js?v=p2s6f";
 import { rememberApiError, syncFinexAi } from "./ai.js?v=aiux3";
 
 const root = document.getElementById("root");
@@ -862,6 +862,7 @@ function opnameDetailHtml(doc) {
   const finHtml = writable
     ? `<div class="row" style="margin:12px 0;gap:8px;align-items:center">
          <button type="button" class="btn btn-gold" id="op-finalize">Санашни якунлаш</button>
+         <button type="button" class="btn btn-ghost" id="op-cancel">Санашни бекор қилиш</button>
          <span class="err" id="op-finalize-err"></span>
        </div>`
     : "";
@@ -1157,6 +1158,31 @@ function bindOpnameDetail() {
     window.__opnameBusy = true;
     try {
       await api("/api/stock-opnames/" + window.__opnameDoc.id + "/finalize", { method: "POST" });
+      await reloadOpnameDetail();
+    } catch (ex) {
+      if (err) err.textContent = ex.message;
+      if (btn) btn.disabled = false;
+    } finally {
+      window.__opnameBusy = false;
+    }
+  });
+
+  document.getElementById("op-cancel")?.addEventListener("click", async () => {
+    const btn = document.getElementById("op-cancel");
+    const err = document.getElementById("op-finalize-err");
+    if (window.__opnameBusy || btn?.disabled) return;
+    const ok = await askConfirm({
+      title: "Санашни бекор қилиш",
+      text: "Бу санаш ҳужжатини бекор қилмоқчимисиз? Омбор қолдиғи ўзгармайди.",
+      okLabel: "Bekor qilish",
+      cancelLabel: "Ortga",
+    });
+    if (!ok) return;
+    if (err) err.textContent = "";
+    if (btn) btn.disabled = true;
+    window.__opnameBusy = true;
+    try {
+      await api("/api/stock-opnames/" + window.__opnameDoc.id + "/cancel", { method: "POST" });
       await reloadOpnameDetail();
     } catch (ex) {
       if (err) err.textContent = ex.message;

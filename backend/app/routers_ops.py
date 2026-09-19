@@ -669,6 +669,51 @@ def finalize_stock_opname(
     return _opname_header(doc, store_name=store.name, created_by_name=user.full_name, line_count=len(lines))
 
 
+
+@router.post("/stock-opnames/{opname_id}/cancel")
+def cancel_stock_opname(
+    opname_id: int,
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    """OPEN -> CANCELLED. Document lifecycle only; no stock writes."""
+    forbid_company_kirim_write(user)
+    store = current_store(user, db)
+    doc = _get_store_opname(db, user, store, opname_id)
+    status = (doc.status or "").upper()
+    if status != "OPEN":
+        raise HTTPException(409, OPNAME_READONLY)
+    line_count = int(
+        db.query(func.count(StockOpnameLine.id))
+        .filter(StockOpnameLine.opname_id == doc.id)
+        .scalar()
+        or 0
+    )
+    try:
+        doc.status = "CANCELLED"
+        doc.cancelled_at = datetime.now()
+        write_audit(
+            db,
+            user,
+            "stock.opname.cancel",
+            entity="stock_opname",
+            entity_id=doc.id,
+            payload={
+                "opname_id": doc.id,
+                "number": doc.number,
+                "company_id": user.company_id,
+                "store_id": store.id,
+                "line_count": line_count,
+            },
+        )
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    db.refresh(doc)
+    return _opname_header(doc, store_name=store.name, created_by_name=user.full_name, line_count=line_count)
+
+
 @router.get("/cash")
 def cash_state(user: User = Depends(require_perm("cash")), db: Session = Depends(get_db)):
     store = current_store(user, db)
