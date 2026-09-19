@@ -94,7 +94,7 @@ class CategoryIn(BaseModel):
 
 class StockInItemIn(BaseModel):
     product_id: int
-    qty: float
+    qty: float = Field(gt=0)
     buy_price: float = 0
 
 
@@ -147,7 +147,46 @@ class SupplierIn(BaseModel):
 
 class TransferItemIn(BaseModel):
     product_id: int
+    qty: float = Field(gt=0)
+
+
+class StockAdjustIn(BaseModel):
+    product_id: int
     qty: float
+    reason: str = Field(min_length=3, max_length=300)
+
+
+class StockOpnameCreate(BaseModel):
+    note: str = ""
+
+
+class StockOpnameLineIn(BaseModel):
+    product_id: int
+    counted_qty: Optional[float] = None
+
+    @field_validator("counted_qty")
+    @classmethod
+    def counted_qty_ok(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if v != v:
+            raise ValueError("Miqdor noto'g'ri")
+        if v < 0:
+            raise ValueError("Sanangan miqdor manfiy bo'lmasin")
+        return round(float(v), 3)
+
+
+class StockOpnameLinePatch(BaseModel):
+    counted_qty: float
+
+    @field_validator("counted_qty")
+    @classmethod
+    def counted_qty_ok(cls, v: float) -> float:
+        if v != v:
+            raise ValueError("Miqdor noto'g'ri")
+        if v < 0:
+            raise ValueError("Sanangan miqdor manfiy bo'lmasin")
+        return round(float(v), 3)
 
 
 class TransferCreate(BaseModel):

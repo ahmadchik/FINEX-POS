@@ -4,19 +4,21 @@ from datetime import datetime, timedelta
 import io
 import zipfile
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 import os
 from fastapi.responses import Response
 from .report_xlsx import content_disposition, export_filename, fill_hisobot_xlsx
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .audit import write_audit
 from .db import get_db
 from .deps import current_store, forbid_company_kirim_write, require_perm
 from .ledger import move_stock
-from .models import CashTxn, Expense, Product, Sale, SaleItem, StockIn, StockInItem, Store, User
+from .models import CashTxn, Expense, Product, Sale, SaleItem, StockIn, StockInItem, StockMovement, StockOpname, StockOpnameLine, Store, User
 from .plans import plan_of, refresh_company_status
-from .schemas import CashCreate, StaffIn, StaffPatch, StockInCreate
+from .schemas import CashCreate, StaffIn, StaffPatch, StockAdjustIn, StockInCreate, StockOpnameCreate, StockOpnameLineIn, StockOpnameLinePatch
 from .security import ROLES, hash_password
 
 router = APIRouter(prefix="/api", tags=["ops"])
@@ -46,15 +48,24 @@ def create_stock_in(
     db.flush()
     total = 0.0
     for row in body.items:
+        try:
+            qty = float(row.qty)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Miqdor noto'g'ri")
+        if qty != qty or qty <= 0:
+            raise HTTPException(400, "Miqdor 0 dan katta bo'lsin")
+        qty = round(qty, 3)
         product = db.get(Product, row.product_id)
         if not product or product.company_id != user.company_id or product.store_id != store.id:
             raise HTTPException(404, "Mahsulot topilmadi")
-        move_stock(db, product, row.qty, user=user, store_id=store.id, kind="IN", ref_type="stock_in", ref_id=doc.id)
+        if not product.is_active:
+            raise HTTPException(400, "Mahsulot nofaol")
+        move_stock(db, product, qty, user=user, store_id=store.id, kind="IN", ref_type="stock_in", ref_id=doc.id)
         if row.buy_price:
             product.buy_price = row.buy_price
-        line = row.qty * (row.buy_price or product.buy_price)
+        line = qty * (row.buy_price or product.buy_price)
         total += line
-        db.add(StockInItem(stock_in_id=doc.id, product_id=product.id, qty=row.qty, buy_price=row.buy_price))
+        db.add(StockInItem(stock_in_id=doc.id, product_id=product.id, qty=qty, buy_price=row.buy_price))
     doc.total = round(total, 2)
     db.commit()
     db.refresh(doc)
@@ -106,6 +117,556 @@ def get_stock_in(doc_id: int, user: User = Depends(require_perm("stock")), db: S
             for i in doc.items
         ],
     }
+
+
+
+MOVEMENT_LIST_DEFAULT = 50
+MOVEMENT_LIST_MAX = 200
+MOVEMENT_KINDS = (
+    "OPENING",
+    "IN",
+    "SALE",
+    "RETURN",
+    "TRANSFER_OUT",
+    "TRANSFER_IN",
+    "ADJUST",
+)
+
+
+def _parse_movement_dt(value: str | None, *, end: bool = False):
+    if value is None or not str(value).strip():
+        return None
+    raw = str(value).strip()
+    try:
+        if len(raw) <= 10:
+            dt = datetime.strptime(raw[:10], "%Y-%m-%d")
+            if end:
+                return dt + timedelta(days=1)
+            return dt
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(400, "Sana noto'g'ri")
+
+
+@router.get("/stock-movements")
+def list_stock_movements(
+    response: Response,
+    product_id: int | None = None,
+    kind: str = "",
+    page: int = Query(1, ge=1),
+    limit: int = Query(MOVEMENT_LIST_DEFAULT, ge=1),
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
+):
+    store = current_store(user, db)
+    limit = min(int(limit), MOVEMENT_LIST_MAX)
+    page = max(int(page), 1)
+    offset = (page - 1) * limit
+    q = db.query(StockMovement).filter(
+        StockMovement.company_id == user.company_id,
+        StockMovement.store_id == store.id,
+    )
+    if product_id is not None:
+        product = db.get(Product, product_id)
+        if not product or product.company_id != user.company_id or product.store_id != store.id:
+            raise HTTPException(404, "Mahsulot topilmadi")
+        q = q.filter(StockMovement.product_id == product_id)
+    kind_n = (kind or "").strip().upper()
+    if kind_n:
+        q = q.filter(StockMovement.kind == kind_n)
+    start = _parse_movement_dt(date_from, end=False)
+    end = _parse_movement_dt(date_to, end=True)
+    if start is not None:
+        q = q.filter(StockMovement.created_at >= start)
+    if end is not None:
+        q = q.filter(StockMovement.created_at < end)
+    total = q.count()
+    rows = (
+        q.order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    product_ids = {m.product_id for m in rows}
+    user_ids = {m.user_id for m in rows if m.user_id}
+    products = {
+        p.id: p
+        for p in db.query(Product).filter(Product.id.in_(product_ids)).all()
+    } if product_ids else {}
+    users = {
+        u.id: u
+        for u in db.query(User).filter(User.id.in_(user_ids)).all()
+    } if user_ids else {}
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Page"] = str(page)
+    response.headers["X-Limit"] = str(limit)
+    out = []
+    for m in rows:
+        p = products.get(m.product_id)
+        u = users.get(m.user_id) if m.user_id else None
+        out.append(
+            {
+                "id": m.id,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "product_id": m.product_id,
+                "product_name": p.name if p else "",
+                "sku": (p.sku or "") if p else "",
+                "barcode": (p.barcode or "") if p else "",
+                "kind": m.kind,
+                "qty": m.qty,
+                "balance_after": m.balance_after,
+                "user_id": m.user_id,
+                "user_name": u.full_name if u else "",
+                "store_id": m.store_id,
+                "note": m.note or "",
+                "ref_type": m.ref_type or "",
+                "ref_id": m.ref_id,
+            }
+        )
+    return out
+
+
+
+@router.post("/stock-adjustments")
+def create_stock_adjustment(
+    body: StockAdjustIn,
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    """Difference-based adjust: new_stock = current + qty. Maps to move_stock(kind=ADJUST)."""
+    store = current_store(user, db)
+    try:
+        qty = float(body.qty)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Miqdor noto'g'ri")
+    if qty != qty:
+        raise HTTPException(400, "Miqdor noto'g'ri")
+    qty = round(qty, 3)
+    if abs(qty) < 0.0001:
+        raise HTTPException(400, "Tuzatish noldan farq qilsin")
+    reason = (body.reason or "").strip()
+    if len(reason) < 3:
+        raise HTTPException(400, "Sabab kamida 3 belgi")
+    product = db.get(Product, body.product_id)
+    if not product or product.company_id != user.company_id or product.store_id != store.id:
+        raise HTTPException(404, "Mahsulot topilmadi")
+    if not product.is_active:
+        raise HTTPException(400, "Mahsulot nofaol")
+    before = float(product.stock or 0)
+    after = round(before + qty, 3)
+    if after < -0.0001:
+        raise HTTPException(400, f"{product.name}: qoldiq yetarli emas ({product.stock})")
+    move_stock(
+        db,
+        product,
+        qty,
+        user=user,
+        store_id=store.id,
+        kind="ADJUST",
+        note=reason[:300],
+        ref_type="stock_adjust",
+        ref_id=product.id,
+    )
+    write_audit(
+        db,
+        user,
+        "stock.adjust",
+        entity="product",
+        entity_id=product.id,
+        payload={
+            "store_id": store.id,
+            "product_id": product.id,
+            "qty": qty,
+            "stock_before": before,
+            "stock_after": float(product.stock or 0),
+            "reason": reason[:300],
+        },
+    )
+    db.commit()
+    db.refresh(product)
+    mov = (
+        db.query(StockMovement)
+        .filter(
+            StockMovement.product_id == product.id,
+            StockMovement.kind == "ADJUST",
+            StockMovement.store_id == store.id,
+        )
+        .order_by(StockMovement.id.desc())
+        .first()
+    )
+
+    return {
+        "product_id": product.id,
+        "stock_before": before,
+        "qty": qty,
+        "stock_after": float(product.stock or 0),
+        "reason": reason,
+        "kind": "ADJUST",
+        "movement_id": mov.id if mov else None,
+    }
+
+
+OPNAME_LIST_DEFAULT = 50
+OPNAME_LIST_MAX = 200
+OPNAME_OPEN_CONFLICT = "Bu do'konda ochiq inventarizatsiya bor"
+OPNAME_LINE_CONFLICT = "Bu mahsulot allaqachon qo'shilgan"
+OPNAME_READONLY = "Faqat ochiq inventarizatsiya o'zgartiriladi"
+OPNAME_COUNTED_REQUIRED = "Barcha qatorlarda sanangan miqdor bo'lsin"
+OPNAME_COUNTED_NEGATIVE = "Sanangan miqdor manfiy bo'lmasin"
+
+
+def _get_store_opname(db: Session, user: User, store: Store, opname_id: int) -> StockOpname:
+    doc = db.get(StockOpname, opname_id)
+    if not doc or doc.company_id != user.company_id or doc.store_id != store.id:
+        raise HTTPException(404, "Hujjat topilmadi")
+    return doc
+
+
+def _require_opname_open(doc: StockOpname) -> None:
+    if (doc.status or "").upper() != "OPEN":
+        raise HTTPException(409, OPNAME_READONLY)
+
+
+def _opname_header(doc: StockOpname, *, store_name: str = "", created_by_name: str = "", line_count: int | None = None) -> dict:
+    out = {
+        "id": doc.id,
+        "number": doc.number,
+        "status": doc.status,
+        "store_id": doc.store_id,
+        "store_name": store_name,
+        "note": doc.note or "",
+        "created_by": doc.created_by,
+        "created_by_name": created_by_name,
+        "created_at": doc.created_at.isoformat() if doc.created_at else None,
+        "posted_at": doc.posted_at.isoformat() if doc.posted_at else None,
+        "cancelled_at": doc.cancelled_at.isoformat() if doc.cancelled_at else None,
+    }
+    if line_count is not None:
+        out["line_count"] = line_count
+    return out
+
+
+@router.post("/stock-opnames")
+def create_stock_opname(
+    body: StockOpnameCreate,
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    forbid_company_kirim_write(user)
+    store = current_store(user, db)
+    existing = (
+        db.query(StockOpname)
+        .filter(
+            StockOpname.company_id == user.company_id,
+            StockOpname.store_id == store.id,
+            StockOpname.status == "OPEN",
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(409, OPNAME_OPEN_CONFLICT)
+    count = db.query(StockOpname).filter(StockOpname.company_id == user.company_id).count() + 1
+    doc = StockOpname(
+        company_id=user.company_id,
+        store_id=store.id,
+        number=f"OP-{count:06d}",
+        status="OPEN",
+        note=(body.note or "")[:300],
+        created_by=user.id,
+    )
+    db.add(doc)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, OPNAME_OPEN_CONFLICT)
+    write_audit(
+        db,
+        user,
+        "stock.opname.create",
+        entity="stock_opname",
+        entity_id=doc.id,
+        payload={
+            "opname_id": doc.id,
+            "number": doc.number,
+            "company_id": user.company_id,
+            "store_id": store.id,
+            "user_id": user.id,
+        },
+    )
+    db.commit()
+    db.refresh(doc)
+    return _opname_header(doc, store_name=store.name, created_by_name=user.full_name, line_count=0)
+
+
+@router.get("/stock-opnames")
+def list_stock_opnames(
+    response: Response,
+    page: int = Query(1, ge=1),
+    limit: int = Query(OPNAME_LIST_DEFAULT, ge=1),
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    store = current_store(user, db)
+    limit = min(int(limit), OPNAME_LIST_MAX)
+    page = max(int(page), 1)
+    offset = (page - 1) * limit
+    q = db.query(StockOpname).filter(
+        StockOpname.company_id == user.company_id,
+        StockOpname.store_id == store.id,
+    )
+    total = q.count()
+    rows = q.order_by(StockOpname.created_at.desc(), StockOpname.id.desc()).offset(offset).limit(limit).all()
+    ids = [d.id for d in rows]
+    line_counts = {}
+    if ids:
+        for oid, n in (
+            db.query(StockOpnameLine.opname_id, func.count(StockOpnameLine.id))
+            .filter(StockOpnameLine.opname_id.in_(ids))
+            .group_by(StockOpnameLine.opname_id)
+            .all()
+        ):
+            line_counts[oid] = int(n)
+    user_ids = {d.created_by for d in rows if d.created_by}
+    users = {u.id: u for u in db.query(User).filter(User.id.in_(user_ids)).all()} if user_ids else {}
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Page"] = str(page)
+    response.headers["X-Limit"] = str(limit)
+    return [
+        _opname_header(
+            d,
+            store_name=store.name,
+            created_by_name=(users[d.created_by].full_name if d.created_by and d.created_by in users else ""),
+            line_count=line_counts.get(d.id, 0),
+        )
+        for d in rows
+    ]
+
+
+@router.get("/stock-opnames/{opname_id}")
+def get_stock_opname(
+    opname_id: int,
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    store = current_store(user, db)
+    doc = _get_store_opname(db, user, store, opname_id)
+    lines = (
+        db.query(StockOpnameLine)
+        .filter(StockOpnameLine.opname_id == doc.id)
+        .order_by(StockOpnameLine.id)
+        .all()
+    )
+    product_ids = {ln.product_id for ln in lines}
+    products = {
+        p.id: p for p in db.query(Product).filter(Product.id.in_(product_ids)).all()
+    } if product_ids else {}
+    creator = db.get(User, doc.created_by) if doc.created_by else None
+    header = _opname_header(
+        doc,
+        store_name=store.name,
+        created_by_name=creator.full_name if creator else "",
+        line_count=len(lines),
+    )
+    header["lines"] = []
+    for ln in lines:
+        p = products.get(ln.product_id)
+        header["lines"].append(
+            {
+                "id": ln.id,
+                "line_id": ln.id,
+                "product_id": ln.product_id,
+                "product_name": p.name if p else "",
+                "sku": (p.sku or "") if p else "",
+                "barcode": (p.barcode or "") if p else "",
+                "is_active": bool(p.is_active) if p else None,
+                "system_qty": ln.system_qty,
+                "counted_qty": ln.counted_qty,
+                "difference": ln.difference,
+            }
+        )
+    return header
+
+
+@router.post("/stock-opnames/{opname_id}/lines")
+def add_stock_opname_line(
+    opname_id: int,
+    body: StockOpnameLineIn,
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    forbid_company_kirim_write(user)
+    store = current_store(user, db)
+    doc = _get_store_opname(db, user, store, opname_id)
+    _require_opname_open(doc)
+    product = db.get(Product, body.product_id)
+    if not product or product.company_id != user.company_id or product.store_id != store.id:
+        raise HTTPException(404, "Mahsulot topilmadi")
+    if not product.is_active:
+        raise HTTPException(400, "Mahsulot nofaol")
+    line = StockOpnameLine(
+        opname_id=doc.id,
+        product_id=product.id,
+        system_qty=float(product.stock or 0),
+        counted_qty=body.counted_qty,
+        difference=None,
+    )
+    db.add(line)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, OPNAME_LINE_CONFLICT)
+    db.commit()
+    db.refresh(line)
+    return {
+        "id": line.id,
+        "line_id": line.id,
+        "product_id": line.product_id,
+        "product_name": product.name,
+        "sku": product.sku or "",
+        "barcode": product.barcode or "",
+        "is_active": bool(product.is_active),
+        "system_qty": line.system_qty,
+        "counted_qty": line.counted_qty,
+        "difference": line.difference,
+    }
+
+
+@router.patch("/stock-opnames/{opname_id}/lines/{line_id}")
+def patch_stock_opname_line(
+    opname_id: int,
+    line_id: int,
+    body: StockOpnameLinePatch,
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    forbid_company_kirim_write(user)
+    store = current_store(user, db)
+    doc = _get_store_opname(db, user, store, opname_id)
+    _require_opname_open(doc)
+    line = db.get(StockOpnameLine, line_id)
+    if not line or line.opname_id != doc.id:
+        raise HTTPException(404, "Qator topilmadi")
+    line.counted_qty = body.counted_qty
+    # difference is stored at finalize (Step 6D), not here
+    line.difference = None
+    db.commit()
+    db.refresh(line)
+    return {
+        "id": line.id,
+        "line_id": line.id,
+        "product_id": line.product_id,
+        "system_qty": line.system_qty,
+        "counted_qty": line.counted_qty,
+        "difference": line.difference,
+    }
+
+
+@router.delete("/stock-opnames/{opname_id}/lines/{line_id}")
+def delete_stock_opname_line(
+    opname_id: int,
+    line_id: int,
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    forbid_company_kirim_write(user)
+    store = current_store(user, db)
+    doc = _get_store_opname(db, user, store, opname_id)
+    _require_opname_open(doc)
+    line = db.get(StockOpnameLine, line_id)
+    if not line or line.opname_id != doc.id:
+        raise HTTPException(404, "Qator topilmadi")
+    db.delete(line)
+    db.commit()
+    return {"ok": True}
+
+
+
+@router.post("/stock-opnames/{opname_id}/finalize")
+def finalize_stock_opname(
+    opname_id: int,
+    user: User = Depends(require_perm("stock")),
+    db: Session = Depends(get_db),
+):
+    """Atomic OPEN -> POSTED reconciliation via move_stock(kind=ADJUST)."""
+    forbid_company_kirim_write(user)
+    store = current_store(user, db)
+    doc = _get_store_opname(db, user, store, opname_id)
+    status = (doc.status or "").upper()
+    if status != "OPEN":
+        raise HTTPException(409, OPNAME_READONLY)
+    lines = (
+        db.query(StockOpnameLine)
+        .filter(StockOpnameLine.opname_id == doc.id)
+        .order_by(StockOpnameLine.id)
+        .all()
+    )
+    for line in lines:
+        if line.counted_qty is None:
+            raise HTTPException(400, OPNAME_COUNTED_REQUIRED)
+        counted = float(line.counted_qty)
+        if counted != counted:
+            raise HTTPException(400, OPNAME_COUNTED_REQUIRED)
+        if counted < 0:
+            raise HTTPException(400, OPNAME_COUNTED_NEGATIVE)
+    raw_note = (doc.note or "").strip()
+    mv_note = (f"{doc.number} · {raw_note}" if raw_note else (doc.number or "opname"))[:300]
+    total_adj = 0.0
+    adjusted = 0
+    try:
+        for line in lines:
+            product = db.get(Product, line.product_id)
+            if not product or product.company_id != user.company_id or product.store_id != store.id:
+                raise HTTPException(404, "Mahsulot topilmadi")
+            db.refresh(product)
+            counted = float(line.counted_qty)
+            system_qty = float(line.system_qty or 0)
+            diff = round(counted - system_qty, 3)
+            live = float(product.stock or 0)
+            if live + diff < -0.0001:
+                raise HTTPException(400, f"{product.name}: qoldiq yetarli emas ({product.stock})")
+            line.difference = diff
+            if abs(diff) >= 0.0001:
+                move_stock(
+                    db,
+                    product,
+                    diff,
+                    user=user,
+                    store_id=store.id,
+                    kind="ADJUST",
+                    note=mv_note,
+                    ref_type="opname",
+                    ref_id=doc.id,
+                )
+                adjusted += 1
+                total_adj += diff
+        doc.status = "POSTED"
+        doc.posted_at = datetime.now()
+        write_audit(
+            db,
+            user,
+            "stock.opname.finalize",
+            entity="stock_opname",
+            entity_id=doc.id,
+            payload={
+                "opname_id": doc.id,
+                "number": doc.number,
+                "company_id": user.company_id,
+                "store_id": store.id,
+                "line_count": len(lines),
+                "adjusted": adjusted,
+                "total_adjustment": round(total_adj, 3),
+            },
+        )
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    db.refresh(doc)
+    return _opname_header(doc, store_name=store.name, created_by_name=user.full_name, line_count=len(lines))
 
 
 @router.get("/cash")

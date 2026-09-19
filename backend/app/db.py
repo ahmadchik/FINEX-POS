@@ -62,6 +62,72 @@ def ensure_schema():
             "ON sales(company_id, store_id, idempotency_key) "
             "WHERE idempotency_key IS NOT NULL AND idempotency_key != ''"
         ))
+
+        def _product_dup_groups(col):
+            return int(
+                conn.execute(
+                    text(
+                        "SELECT COUNT(*) FROM ("
+                        f"SELECT 1 FROM products WHERE {col} IS NOT NULL AND TRIM({col}) != '' "
+                        f"GROUP BY company_id, store_id, {col} HAVING COUNT(*) > 1"
+                        ") AS dup_groups"
+                    )
+                ).scalar()
+                or 0
+            )
+
+        tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()}
+        if "products" in tables:
+            if _product_dup_groups("barcode") == 0:
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_products_company_store_barcode "
+                        "ON products(company_id, store_id, barcode) "
+                        "WHERE barcode IS NOT NULL AND barcode != ''"
+                    )
+                )
+            if _product_dup_groups("sku") == 0:
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_products_company_store_sku "
+                        "ON products(company_id, store_id, sku) "
+                        "WHERE sku IS NOT NULL AND sku != ''"
+                    )
+                )
+        if "stock_movements" in tables:
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_stock_movements_company_store_created "
+                    "ON stock_movements(company_id, store_id, created_at)"
+                )
+            )
+        if "stock_opnames" in tables:
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_stock_opnames_company_store_created "
+                    "ON stock_opnames(company_id, store_id, created_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_opnames_company_store_open "
+                    "ON stock_opnames(company_id, store_id) "
+                    "WHERE status = 'OPEN'"
+                )
+            )
+        if "stock_opname_lines" in tables:
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_stock_opname_lines_opname_id "
+                    "ON stock_opname_lines(opname_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_opname_lines_opname_product "
+                    "ON stock_opname_lines(opname_id, product_id)"
+                )
+            )
         missing = conn.execute(text(
             "SELECT id FROM companies WHERE account_no IS NULL OR account_no = 0 ORDER BY id"
         )).fetchall()

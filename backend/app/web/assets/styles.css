@@ -631,3 +631,21 @@ html.theme-day .modal { background: rgba(40, 32, 16, .45); }
   .ai-fab { right: 12px; bottom: 12px; }
   .ai-resize { display: none; }
 }
+
+
+/* Phase 2 Step 6C — stock opname */
+.op-warn { margin: 8px 0 12px; }
+.op-counted { max-width: 7.5rem; display: inline-block; }
+.op-suggest { position: relative; }
+.op-drop {
+  position: absolute; z-index: 8; left: 0; right: 0; top: 100%;
+  background: var(--panel, #12161c);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+.op-drop.hidden { display: none; }
+.op-drop-item { display: block; width: 100%; text-align: left; padding: 8px 10px; }
+.op-drop-item .muted { display: block; font-size: 12px; }
+.op-save-st { margin-left: 6px; font-size: 12px; }

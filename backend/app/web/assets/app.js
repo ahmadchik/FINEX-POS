@@ -1,4 +1,4 @@
-import { applyTheme, bindSaas, bindThemeToggle, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t, themeToggleHtml } from "./saas.js?v=cab1";
+import { applyTheme, bindSaas, bindThemeToggle, lang, pagePlatform, pageStores, pageSuppliers, pageTransfers, setLang, t, themeToggleHtml } from "./saas.js?v=p2s6d";
 import { rememberApiError, syncFinexAi } from "./ai.js?v=aiux3";
 
 const root = document.getElementById("root");
@@ -46,12 +46,13 @@ function logout() {
 }
 
 async function api(path, opts = {}) {
+  const { withHeaders, headers: extraHeaders, ...rest } = opts;
   const res = await fetch(path, {
-    ...opts,
+    ...rest,
     headers: {
       "Content-Type": "application/json",
       ...(token() ? { Authorization: `Bearer ${token()}` } : {}),
-      ...(opts.headers || {}),
+      ...(extraHeaders || {}),
     },
   });
   const data = await res.json().catch(() => ({}));
@@ -62,6 +63,16 @@ async function api(path, opts = {}) {
     const msg = typeof data.detail === "string" ? data.detail : data.message || "Xatolik";
     rememberApiError({ path, status: res.status, message: msg });
     throw new Error(msg);
+  }
+  if (withHeaders) {
+    return {
+      data,
+      headers: {
+        total: Number(res.headers.get("X-Total-Count") || 0),
+        page: Number(res.headers.get("X-Page") || 1),
+        limit: Number(res.headers.get("X-Limit") || 0),
+      },
+    };
   }
   return data;
 }
@@ -212,6 +223,7 @@ function shell(inner) {
     ["pos", t("pos"), "pos"],
     ["products", t("products"), "products"],
     ["stock", t("stock"), "stock"],
+    ["opname", t("opname"), "stock"],
     ["transfers", t("transfers"), "stock"],
     ["sales", t("sales"), "pos"],
     ["customers", t("customers"), "customers"],
@@ -256,7 +268,8 @@ function shell(inner) {
     <div class="modal hidden" id="receipt-modal"></div>
     <div class="modal hidden" id="confirm-modal"></div>
     <div class="modal hidden" id="sale-modal"></div>
-    <div class="modal hidden" id="cennik-modal"></div>`;
+    <div class="modal hidden" id="cennik-modal"></div>
+    <div class="modal hidden" id="stock-history-modal"></div>`;
 }
 
 function ico(path) {
@@ -416,9 +429,198 @@ function openCennikModal(p) {
   };
 }
 
+
+
+async function openStockAdjust(product) {
+  const modal = document.getElementById("stock-history-modal") || document.getElementById("confirm-modal");
+  if (!modal || !product) return;
+  const current = Number(product.stock || 0);
+  const unit = product.unit || "";
+  const preview = () => {
+    const qty = Number(document.getElementById("adj-qty")?.value);
+    const out = document.getElementById("adj-preview");
+    const err = document.getElementById("adj-err");
+    const ok = document.getElementById("adj-ok");
+    if (err) err.textContent = "";
+    if (!(qty === qty) || qty === 0) {
+      if (out) out.innerHTML = `<p class="muted">Farq 0 bo‘lmasin.</p>`;
+      if (ok) ok.disabled = true;
+      return;
+    }
+    const result = Math.round((current + qty) * 1000) / 1000;
+    const neg = result < -0.0001;
+    if (out) {
+      out.innerHTML = `<p>Hozirgi: <b>${current}</b> ${esc(unit)}</p>
+        <p>Farq: <b>${qty > 0 ? "+" : ""}${qty}</b></p>
+        <p>Natija: <b class="${neg ? "stock-low" : ""}">${result}</b> ${esc(unit)}</p>`;
+    }
+    if (ok) ok.disabled = neg;
+    if (neg && err) err.textContent = "Natija manfiy bo‘lmasin";
+  };
+  modal.classList.remove("hidden");
+  modal.innerHTML = `
+    <div class="card confirm-box">
+      <h3>Qoldiqni tuzatish</h3>
+      <p class="muted">${esc(product.name)} · hozirgi qoldiq <b>${current} ${esc(unit)}</b></p>
+      <input class="field" id="adj-qty" type="number" step="0.001" placeholder="Farq (+5 yoki -3)" />
+      <input class="field" id="adj-reason" placeholder="Sabab" style="margin-top:8px" />
+      <div id="adj-preview" style="margin-top:8px"></div>
+      <p class="err" id="adj-err"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-gold" id="adj-ok" disabled>Tasdiqlash</button>
+        <button type="button" class="btn btn-ghost" id="adj-cancel">Bekor</button>
+      </div>
+    </div>`;
+  const close = () => {
+    modal.classList.add("hidden");
+    modal.innerHTML = "";
+  };
+  document.getElementById("adj-cancel").onclick = close;
+  modal.onclick = (e) => {
+    if (e.target === modal) close();
+  };
+  document.getElementById("adj-qty").oninput = preview;
+  document.getElementById("adj-ok").onclick = async () => {
+    const err = document.getElementById("adj-err");
+    const ok = document.getElementById("adj-ok");
+    const qty = Number(document.getElementById("adj-qty")?.value);
+    const reason = String(document.getElementById("adj-reason")?.value || "").trim();
+    if (!(qty === qty) || qty === 0) {
+      if (err) err.textContent = "Farq noldan farq qilsin";
+      return;
+    }
+    if (reason.length < 3) {
+      if (err) err.textContent = "Sabab kamida 3 belgi";
+      return;
+    }
+    const result = Math.round((current + qty) * 1000) / 1000;
+    if (result < -0.0001) {
+      if (err) err.textContent = "Natija manfiy bo‘lmasin";
+      return;
+    }
+    ok.disabled = true;
+    try {
+      await api("/api/stock-adjustments", {
+        method: "POST",
+        body: JSON.stringify({ product_id: product.id, qty, reason }),
+      });
+      close();
+      render();
+    } catch (ex) {
+      if (err) err.textContent = ex.message;
+      ok.disabled = false;
+    }
+  };
+  preview();
+}
+
+async function openStockHistory(product) {
+  const modal = document.getElementById("stock-history-modal");
+  if (!modal || !product) return;
+  const state = window.__stockHist || { page: 1, kind: "", product };
+  state.product = product;
+  window.__stockHist = state;
+  const limit = 50;
+  const params = new URLSearchParams({
+    product_id: String(product.id),
+    page: String(state.page || 1),
+    limit: String(limit),
+  });
+  if (state.kind) params.set("kind", state.kind);
+  let rows = [];
+  let err = "";
+  try {
+    rows = await api("/api/stock-movements?" + params.toString());
+  } catch (ex) {
+    err = ex.message || "Xatolik";
+  }
+  const fmtQty = (n) => {
+    const v = Number(n);
+    if (!(v === v)) return "0";
+    return (v > 0 ? "+" : "") + v;
+  };
+  const fmtDt = (s) => {
+    const d = String(s || "").replace("T", " ");
+    return d.slice(0, 16);
+  };
+  const kinds = ["", "OPENING", "IN", "SALE", "RETURN", "TRANSFER_OUT", "TRANSFER_IN", "ADJUST"];
+  modal.classList.remove("hidden");
+  modal.innerHTML = `
+    <div class="card confirm-box" style="max-width:720px;width:94vw">
+      <h3>Qoldiq tarixi</h3>
+      <p class="muted">${esc(product.name)} · hozirgi qoldiq <b>${product.stock} ${esc(product.unit || "")}</b></p>
+      <div class="grid3" style="margin:8px 0">
+        <select class="field" id="hist-kind">${kinds.map((k) => `<option value="${k}" ${state.kind === k ? "selected" : ""}>${k || "Barcha turlar"}</option>`).join("")}</select>
+      </div>
+      ${err ? `<p class="err">${esc(err)}</p>` : ""}
+      <table class="table">
+        <thead><tr><th>Sana</th><th>Foydalanuvchi</th><th>Tur</th><th>Miqdor</th><th>Qoldiq</th><th>Havola</th></tr></thead>
+        <tbody>
+          ${
+            rows.length
+              ? rows.map((m) => `<tr>
+                  <td>${esc(fmtDt(m.created_at))}</td>
+                  <td>${esc(m.user_name || "—")}</td>
+                  <td>${esc(m.kind)}</td>
+                  <td>${fmtQty(m.qty)}</td>
+                  <td>${m.balance_after}</td>
+                  <td class="muted">${esc((m.ref_type || "") + (m.ref_id ? " #" + m.ref_id : ""))}${m.note ? " · " + esc(m.note) : ""}</td>
+                </tr>`).join("")
+              : `<tr><td colspan="6" class="muted">Harakat yo‘q</td></tr>`
+          }
+        </tbody>
+      </table>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <button type="button" class="btn btn-ghost btn-sm" id="hist-prev" ${state.page <= 1 ? "disabled" : ""}>Oldingi</button>
+        <span class="muted">Sahifa ${state.page}</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="hist-next" ${rows.length < limit ? "disabled" : ""}>Keyingi</button>
+        <button type="button" class="btn btn-ghost" id="hist-close" style="margin-left:auto">Yopish</button>
+      </div>
+    </div>`;
+  document.getElementById("hist-close").onclick = () => {
+    modal.classList.add("hidden");
+    modal.innerHTML = "";
+  };
+  modal.onclick = (e) => {
+    if (e.target === modal) {
+      modal.classList.add("hidden");
+      modal.innerHTML = "";
+    }
+  };
+  document.getElementById("hist-kind").onchange = (e) => {
+    window.__stockHist.kind = e.target.value;
+    window.__stockHist.page = 1;
+    openStockHistory(product);
+  };
+  document.getElementById("hist-prev").onclick = () => {
+    window.__stockHist.page = Math.max(1, Number(window.__stockHist.page || 1) - 1);
+    openStockHistory(product);
+  };
+  document.getElementById("hist-next").onclick = () => {
+    window.__stockHist.page = Number(window.__stockHist.page || 1) + 1;
+    openStockHistory(product);
+  };
+}
+
 async function pageProducts() {
-  const rows = await api("/api/products");
+  const page = Math.max(1, Number(window.__prodPage || 1));
+  const limit = 200;
+  const [rows, cats] = await Promise.all([
+    api("/api/products?page=" + page + "&limit=" + limit),
+    api("/api/categories").catch(() => []),
+  ]);
   window.__products = rows;
+  window.__prodCats = cats || [];
+  window.__prodPage = page;
+  const catOpts = (window.__prodCats || [])
+    .map((c) => `<option value="${c.id}">${esc(c.name)}</option>`)
+    .join("");
+  const pager = `
+    <div style="display:flex;gap:8px;align-items:center;margin:10px 0">
+      <button type="button" class="btn btn-ghost btn-sm" id="p-prev" ${page <= 1 ? "disabled" : ""}>Oldingi</button>
+      <span class="muted">Sahifa ${page}</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="p-next" ${(rows || []).length < limit ? "disabled" : ""}>Keyingi</button>
+    </div>`;
   return `
     <h2>Tovarlar</h2>
     <form id="p-form" class="card" style="margin-bottom:12px">
@@ -430,15 +632,22 @@ async function pageProducts() {
           <button type="button" class="btn btn-ghost" id="p-barcode-auto">Avto</button>
         </div>
         <input class="field" name="sku" placeholder="SKU" />
+        <select class="field" name="category_id">
+          <option value="">Kategoriya</option>
+          ${catOpts}
+        </select>
+        <input class="field" name="manufacturer" placeholder="Ishlab chiqaruvchi" />
         <input class="field" name="sell_price" type="number" step="0.01" min="0" placeholder="Sotuv narxi" required />
         <input class="field" name="buy_price" type="number" step="0.01" min="0" placeholder="Xarid narxi" />
-        <input class="field" name="stock" type="number" step="0.001" placeholder="Qoldiq" />
+        <span id="p-stock-wrap"><input class="field" name="stock" type="number" step="0.001" placeholder="Ochilish qoldig‘i" /></span>
         <input class="field" name="min_stock" type="number" step="0.001" placeholder="Min qoldiq" />
         <input class="field" name="unit" placeholder="Birlik" value="dona" />
+        <label class="check"><input type="checkbox" name="is_active" checked /> Faol</label>
         <button class="btn btn-gold" type="submit" id="p-save">Qo‘shish</button>
       </div>
       <div class="err" id="p-err" style="margin-top:10px"></div>
     </form>
+    ${pager}
     <div class="card" style="margin-bottom:12px">
       <input class="field" id="p-filter" placeholder="Jadvaldan qidirish: nomi yoki barcode..." />
     </div>
@@ -454,6 +663,8 @@ async function pageProducts() {
             <td>
               <button class="btn btn-ghost btn-sm" data-edit='${esc(JSON.stringify(p))}'>Tahrir</button>
                 <button type="button" class="btn btn-ghost btn-sm" data-cennik="${p.id}">Cennik</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-history="${p.id}">Tarix</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-adjust="${p.id}">Tuzatish</button>
               <button class="btn btn-ghost btn-sm" data-toggle="${p.id}" data-name="${esc(p.name)}" data-active="${p.is_active ? "1" : "0"}">${p.is_active ? "O'chirish" : "Yoqish"}</button>
             </td>
           </tr>`;
@@ -490,8 +701,481 @@ function askConfirm({ title, text, okLabel = "O'chirish", cancelLabel = "Bekor q
   });
 }
 
+function hashParams() {
+  const h = location.hash || "";
+  const i = h.indexOf("?");
+  return new URLSearchParams(i >= 0 ? h.slice(i + 1) : "");
+}
+
+function opnameMapErr(ex, kind) {
+  const m = String(ex?.message || "");
+  if (kind === "open" || /ochiq inventarizatsiya/i.test(m)) return "Бу дўконда очиқ саноқ мавжуд.";
+  if (kind === "dup" || /allaqachon qo['‘’]?shilgan/i.test(m)) return "Бу маҳсулот саноққа аллақачон қўшилган.";
+  return m || "Xatolik";
+}
+
+function opnameBadge(st) {
+  const s = String(st || "").toUpperCase();
+  if (s === "OPEN") return `<span class="badge ok">OPEN</span>`;
+  if (s === "POSTED") return `<span class="badge">POSTED</span>`;
+  if (s === "CANCELLED") return `<span class="badge badge-back">CANCELLED</span>`;
+  return `<span class="badge">${esc(s)}</span>`;
+}
+
+function opnameDiffPreview(countedRaw, systemQty) {
+  if (countedRaw === "" || countedRaw === null || countedRaw === undefined) return null;
+  const c = Number(countedRaw);
+  if (!(c === c) || c < 0) return null;
+  return c - Number(systemQty || 0);
+}
+
+function fmtOpDiff(d) {
+  if (d === null || d === undefined) return "—";
+  if (d > 0) return "+" + d;
+  return String(d);
+}
+
+function opnameIsOpen(doc) {
+  return String(doc?.status || "").toUpperCase() === "OPEN";
+}
+
+function opnameCanWrite(doc) {
+  return opnameIsOpen(doc) && !isCompanyCabinet();
+}
+
+function opnameIsDirty() {
+  return !!document.querySelector(".op-counted.dirty");
+}
+
+function paintOpDiff(input) {
+  const tr = input.closest("tr");
+  const cell = tr?.querySelector("[data-diff]");
+  if (!cell) return;
+  const sys = Number(input.dataset.system || 0);
+  const raw = input.value.trim();
+  if (raw === "") {
+    cell.textContent = "—";
+    cell.className = "num muted";
+    return;
+  }
+  const n = Number(raw);
+  if (!(n === n) || n < 0) {
+    cell.textContent = "!";
+    cell.className = "num stock-low";
+    return;
+  }
+  const d = n - sys;
+  cell.textContent = fmtOpDiff(d);
+  cell.className = "num " + (d < 0 ? "stock-low" : d > 0 ? "ok" : "muted");
+}
+
+async function pageOpname() {
+  if (!can("stock")) return `<p class="err">Ruxsat yo‘q</p>`;
+  const id = Number(hashParams().get("id") || 0);
+  if (id) return pageOpnameDetail(id);
+  return pageOpnameList();
+}
+
+async function pageOpnameList() {
+  const page = Math.max(1, Number(window.__opnameListPage || hashParams().get("page") || 1));
+  const limit = 50;
+  window.__opnameListPage = page;
+  let rows = [];
+  let total = 0;
+  let err = "";
+  try {
+    const pack = await api("/api/stock-opnames?page=" + page + "&limit=" + limit, { withHeaders: true });
+    rows = pack.data || [];
+    total = Number(pack.headers?.total || rows.length);
+  } catch (ex) {
+    err = ex.message || "Xatolik";
+  }
+  const pages = Math.max(1, Math.ceil(total / limit) || 1);
+  const createHtml = isCompanyCabinet()
+    ? `<p class="muted">Kompaniya kabinetidan sanash ochilmaydi. Do‘kon loginidan kiring.</p>`
+    : `<form id="op-create" class="card" style="margin-bottom:12px">
+        <div class="grid3" style="margin-top:0">
+          <input class="field" name="note" placeholder="Izoh (ixtiyoriy)" maxlength="300" />
+          <button class="btn btn-gold" type="submit" id="op-create-btn">Yangi sanash</button>
+        </div>
+        <div class="err" id="op-create-err" style="margin-top:8px"></div>
+      </form>`;
+  return `
+    <h2>${t("opname")}</h2>
+    ${createHtml}
+    ${err ? `<p class="err">${esc(err)}</p>` : ""}
+    <div class="table-scroll">
+    <table class="table">
+      <thead><tr><th>№</th><th>Status</th><th>Do‘kon</th><th>Sana</th><th>Kim</th><th class="num">Qator</th><th>Izoh</th></tr></thead>
+      <tbody>
+        ${
+          rows.length
+            ? rows
+                .map(
+                  (d) => `<tr class="clickable" data-opid="${d.id}">
+                    <td>${esc(d.number)}</td>
+                    <td>${opnameBadge(d.status)}</td>
+                    <td>${esc(d.store_name || "—")}</td>
+                    <td>${fmtDate(d.created_at)}</td>
+                    <td>${esc(d.created_by_name || "—")}</td>
+                    <td class="num">${d.line_count ?? 0}</td>
+                    <td class="muted">${esc(d.note || "—")}</td>
+                  </tr>`,
+                )
+                .join("")
+            : `<tr><td colspan="7" class="muted">Sanash hujjatlari yo‘q</td></tr>`
+        }
+      </tbody>
+    </table>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <button type="button" class="btn btn-ghost btn-sm" id="op-prev" ${page <= 1 ? "disabled" : ""}>Oldingi</button>
+      <span class="muted">Sahifa ${page} / ${pages} · jami ${total}</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="op-next" ${page >= pages ? "disabled" : ""}>Keyingi</button>
+    </div>`;
+}
+
+function opnameDetailHtml(doc) {
+  const open = opnameIsOpen(doc);
+  const writable = opnameCanWrite(doc);
+  const lines = doc.lines || [];
+  const statusNote = !open
+    ? String(doc.status || "").toUpperCase() === "POSTED"
+      ? `<p class="muted">Sanash yakunlangan — faqat o‘qish.</p>`
+      : `<p class="muted">Sanash bekor qilingan — faqat o‘qish.</p>`
+    : "";
+  const warn = open
+    ? `<p class="muted op-warn">Эслатма: саноқ бошланганидан кейин қолдиқ ўзгариши мумкин. Фарқ саноқ бошланган пайтдаги snapshot асосида ҳисобланади.</p>`
+    : "";
+  const addHtml = writable
+    ? `<div class="card" style="margin-bottom:12px">
+        <div class="grid3" style="margin-top:0">
+          <div class="op-suggest">
+            <input class="field" id="op-search" placeholder="Barcode / qidiruv..." autocomplete="off" />
+            <div id="op-drop" class="op-drop hidden"></div>
+          </div>
+          <p id="op-add-hint" class="muted" style="margin:0;align-self:center"></p>
+        </div>
+        <div class="err" id="op-add-err" style="margin-top:8px"></div>
+      </div>`
+    : "";
+  const finHtml = writable
+    ? `<div class="row" style="margin:12px 0;gap:8px;align-items:center">
+         <button type="button" class="btn btn-gold" id="op-finalize">Санашни якунлаш</button>
+         <span class="err" id="op-finalize-err"></span>
+       </div>`
+    : "";
+  return `
+    <p><button type="button" class="btn btn-ghost btn-sm" id="op-back">← Ro‘yxat</button></p>
+    <h2>${esc(doc.number || t("opname"))} ${opnameBadge(doc.status)}</h2>
+    <p class="muted">${esc(doc.store_name || "")} · ${fmtDate(doc.created_at)} · ${esc(doc.created_by_name || "—")}${doc.note ? " · " + esc(doc.note) : ""}</p>
+    ${statusNote}${warn}${addHtml}
+    <div class="table-scroll">
+    <table class="table" id="op-lines">
+      <thead><tr><th>Mahsulot</th><th>SKU</th><th>Barcode</th><th class="num">System</th><th class="num">Counted</th><th class="num">Farq</th><th></th></tr></thead>
+      <tbody>
+        ${
+          lines.length
+            ? lines
+                .map((ln) => {
+                  const raw = ln.counted_qty === null || ln.counted_qty === undefined ? "" : String(ln.counted_qty);
+                  const d = opnameDiffPreview(raw, ln.system_qty);
+                  const countedCell = writable
+                    ? `<input class="field op-counted" type="number" min="0" step="any" inputmode="decimal" data-line="${ln.line_id || ln.id}" data-system="${ln.system_qty}" data-saved="${esc(raw)}" value="${esc(raw)}" placeholder="—" />
+                       <span class="muted op-save-st" data-st="${ln.line_id || ln.id}"></span>`
+                    : raw === ""
+                      ? `<span class="muted">—</span>`
+                      : esc(raw);
+                  const del = writable
+                    ? `<button type="button" class="btn btn-ghost btn-sm" data-opdel="${ln.line_id || ln.id}" data-name="${esc(ln.product_name || "")}">O‘chirish</button>`
+                    : "";
+                  return `<tr data-line-row="${ln.line_id || ln.id}" data-pid="${ln.product_id}">
+                    <td>${esc(ln.product_name || "")}${ln.is_active === false ? ' <span class="muted">(nofaol)</span>' : ""}</td>
+                    <td class="muted">${esc(ln.sku || "—")}</td>
+                    <td class="muted">${esc(ln.barcode || "—")}</td>
+                    <td class="num">${ln.system_qty}</td>
+                    <td>${countedCell}</td>
+                    <td class="num ${d === null ? "muted" : d < 0 ? "stock-low" : d > 0 ? "ok" : "muted"}" data-diff>${fmtOpDiff(d)}</td>
+                    <td>${del}</td>
+                  </tr>`;
+                })
+                .join("")
+            : `<tr><td colspan="7" class="muted">Qatorlar yo‘q${writable ? ". Barcode yoki qidiruv orqali mahsulot qo‘shing." : ""}</td></tr>`
+        }
+      </tbody>
+    </table>
+    </div>
+    ${finHtml}`;
+}
+
+async function pageOpnameDetail(id) {
+  try {
+    const doc = await api("/api/stock-opnames/" + id);
+    window.__opnameDoc = doc;
+    return opnameDetailHtml(doc);
+  } catch (ex) {
+    return `<p><button type="button" class="btn btn-ghost btn-sm" id="op-back">← Ro‘yxat</button></p><p class="err">${esc(ex.message)}</p>`;
+  }
+}
+
+async function reloadOpnameDetail() {
+  const id = Number(hashParams().get("id") || window.__opnameDoc?.id || 0);
+  if (!id) return render();
+  const main = document.querySelector(".main");
+  if (!main) return render();
+  main.innerHTML = `<p class="muted">Yuklanmoqda...</p>`;
+  try {
+    const doc = await api("/api/stock-opnames/" + id);
+    window.__opnameDoc = doc;
+    main.innerHTML = opnameDetailHtml(doc);
+    bindOpnameDetail();
+  } catch (ex) {
+    main.innerHTML = `<p class="err">${esc(ex.message)}</p>`;
+  }
+}
+
+function bindOpnameList() {
+  document.querySelectorAll("[data-opid]").forEach((row) => {
+    row.onclick = () => {
+      location.hash = "#/app/opname?id=" + row.dataset.opid;
+    };
+  });
+  document.getElementById("op-prev")?.addEventListener("click", () => {
+    window.__opnameListPage = Math.max(1, Number(window.__opnameListPage || 1) - 1);
+    render();
+  });
+  document.getElementById("op-next")?.addEventListener("click", () => {
+    window.__opnameListPage = Number(window.__opnameListPage || 1) + 1;
+    render();
+  });
+  const form = document.getElementById("op-create");
+  if (!form) return;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("op-create-err");
+    const btn = document.getElementById("op-create-btn");
+    if (err) err.textContent = "";
+    if (btn?.disabled) return;
+    if (btn) btn.disabled = true;
+    window.__opnameBusy = true;
+    try {
+      const note = String(new FormData(form).get("note") || "");
+      const doc = await api("/api/stock-opnames", { method: "POST", body: JSON.stringify({ note }) });
+      location.hash = "#/app/opname?id=" + doc.id;
+    } catch (ex) {
+      if (err) err.textContent = opnameMapErr(ex, "open");
+      if (btn) btn.disabled = false;
+    } finally {
+      window.__opnameBusy = false;
+    }
+  };
+}
+
+function bindOpnameDetail() {
+  document.getElementById("op-back")?.addEventListener("click", () => {
+    location.hash = "#/app/opname";
+  });
+  const search = document.getElementById("op-search");
+  const drop = document.getElementById("op-drop");
+  const addErr = document.getElementById("op-add-err");
+  const hint = document.getElementById("op-add-hint");
+  let tmr = 0;
+  const hideDrop = () => drop && drop.classList.add("hidden");
+  const showResults = (rows) => {
+    if (!drop) return;
+    if (!rows.length) {
+      drop.innerHTML = `<div class="muted" style="padding:8px">Topilmadi</div>`;
+      drop.classList.remove("hidden");
+      return;
+    }
+    drop.innerHTML = rows
+      .map(
+        (p) => `<button type="button" class="link op-drop-item" data-addpid="${p.id}">
+          <b>${esc(p.name)}</b>
+          <span class="muted">${esc(p.barcode || "")} ${esc(p.sku || "")} · snapshot ${p.stock}</span>
+        </button>`,
+      )
+      .join("");
+    drop.classList.remove("hidden");
+  };
+  const addProduct = async (product) => {
+    if (!product || window.__opnameBusy) return;
+    if (addErr) addErr.textContent = "";
+    const doc = window.__opnameDoc;
+    if ((doc?.lines || []).some((l) => Number(l.product_id) === Number(product.id))) {
+      if (addErr) addErr.textContent = "Бу маҳсулот саноққа аллақачон қўшилган.";
+      return;
+    }
+    window.__opnameBusy = true;
+    try {
+      await api("/api/stock-opnames/" + doc.id + "/lines", {
+        method: "POST",
+        body: JSON.stringify({ product_id: product.id }),
+      });
+      if (search) search.value = "";
+      hideDrop();
+      if (hint) hint.textContent = "";
+      await reloadOpnameDetail();
+    } catch (ex) {
+      if (addErr) addErr.textContent = opnameMapErr(ex, "dup");
+    } finally {
+      window.__opnameBusy = false;
+    }
+  };
+  const runSearch = async (q, autoAdd) => {
+    const s = String(q || "").trim();
+    if (!s) {
+      hideDrop();
+      return;
+    }
+    try {
+      const rows = ((await api("/api/products?q=" + encodeURIComponent(s) + "&limit=20")) || []).filter((p) => p.is_active !== false);
+      const exact = rows.find((p) => String(p.barcode || "") === s);
+      if (autoAdd && exact) {
+        hideDrop();
+        await addProduct(exact);
+        return;
+      }
+      showResults(rows);
+      if (hint) hint.textContent = exact ? exact.name : rows.length ? rows.length + " ta" : "";
+    } catch (ex) {
+      if (addErr) addErr.textContent = ex.message;
+    }
+  };
+  search?.addEventListener("input", () => {
+    clearTimeout(tmr);
+    tmr = setTimeout(() => runSearch(search.value, false), 250);
+  });
+  search?.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    clearTimeout(tmr);
+    runSearch(search.value, true);
+  });
+  drop?.addEventListener("mousedown", (e) => {
+    const b = e.target.closest("[data-addpid]");
+    if (!b) return;
+    e.preventDefault();
+    addProduct({ id: Number(b.dataset.addpid) });
+  });
+  search?.addEventListener("blur", () => setTimeout(hideDrop, 180));
+
+  document.querySelectorAll(".op-counted").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      const saved = inp.dataset.saved ?? "";
+      inp.classList.toggle("dirty", inp.value !== saved);
+      paintOpDiff(inp);
+    });
+    const save = async () => {
+      const raw = inp.value.trim();
+      const saved = inp.dataset.saved ?? "";
+      const st = document.querySelector(`[data-st="${inp.dataset.line}"]`);
+      if (raw === saved) return;
+      if (raw === "") {
+        inp.value = saved;
+        inp.classList.remove("dirty");
+        paintOpDiff(inp);
+        return;
+      }
+      const n = Number(raw);
+      if (!(n === n) || n < 0) {
+        if (st) st.textContent = "xato";
+        return;
+      }
+      if (window.__opnameBusy) return;
+      window.__opnameBusy = true;
+      inp.disabled = true;
+      if (st) st.textContent = "saqlanmoqda…";
+      try {
+        const out = await api(
+          "/api/stock-opnames/" + window.__opnameDoc.id + "/lines/" + inp.dataset.line,
+          { method: "PATCH", body: JSON.stringify({ counted_qty: n }) },
+        );
+        const v = out.counted_qty === null || out.counted_qty === undefined ? "" : String(out.counted_qty);
+        inp.value = v;
+        inp.dataset.saved = v;
+        inp.classList.remove("dirty");
+        paintOpDiff(inp);
+        if (st) st.textContent = "saqlandi";
+        setTimeout(() => {
+          if (st && st.textContent === "saqlandi") st.textContent = "";
+        }, 1200);
+      } catch (ex) {
+        if (st) st.textContent = opnameMapErr(ex);
+      } finally {
+        inp.disabled = false;
+        window.__opnameBusy = false;
+      }
+    };
+    inp.addEventListener("blur", save);
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        inp.blur();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-opdel]").forEach((btn) => {
+    btn.onclick = async () => {
+      if (window.__opnameBusy || btn.disabled) return;
+      const ok = await askConfirm({
+        title: "Qatorni o‘chirish",
+        text: (btn.dataset.name || "Mahsulot") + " qatorini o‘chirasizmi?",
+        okLabel: "O‘chirish",
+        cancelLabel: "Bekor qilish",
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      window.__opnameBusy = true;
+      try {
+        await api("/api/stock-opnames/" + window.__opnameDoc.id + "/lines/" + btn.dataset.opdel, { method: "DELETE" });
+        await reloadOpnameDetail();
+      } catch (ex) {
+        const box = document.getElementById("op-add-err");
+        if (box) box.textContent = ex.message;
+        btn.disabled = false;
+      } finally {
+        window.__opnameBusy = false;
+      }
+    };
+  });
+
+  document.getElementById("op-finalize")?.addEventListener("click", async () => {
+    const btn = document.getElementById("op-finalize");
+    const err = document.getElementById("op-finalize-err");
+    if (window.__opnameBusy || btn?.disabled) return;
+    const ok = await askConfirm({
+      title: "Санашни якунлаш",
+      text: "Санашни якунласангиз, фарқлар омбор қолдиғига қўлланади. Давом этасизми?",
+      okLabel: "Yakunlash",
+      cancelLabel: "Bekor qilish",
+    });
+    if (!ok) return;
+    if (err) err.textContent = "";
+    if (btn) btn.disabled = true;
+    window.__opnameBusy = true;
+    try {
+      await api("/api/stock-opnames/" + window.__opnameDoc.id + "/finalize", { method: "POST" });
+      await reloadOpnameDetail();
+    } catch (ex) {
+      if (err) err.textContent = ex.message;
+      if (btn) btn.disabled = false;
+    } finally {
+      window.__opnameBusy = false;
+    }
+  });
+
+}
+
+function bindOpname(page) {
+  if (page !== "opname") return;
+  if (hashParams().get("id")) bindOpnameDetail();
+  else bindOpnameList();
+}
+
 async function pageStock() {
-  const products = await api("/api/products");
+  const products = await api("/api/products?limit=500");
   const docs = await api("/api/stock-ins");
   window.__stock = { products, lines: [] };
   const opts = (products || [])
@@ -517,7 +1201,7 @@ ${isCompanyCabinet() ? "" : `    <form id="in-form" class="card">
         <p id="in-barcode-hint" class="muted" style="margin:0;align-self:center"></p>
       </div>
       <div class="grid3">
-        <input class="field" id="in-qty" type="number" step="0.001" min="0" placeholder="Miqdor" />
+        <input class="field" id="in-qty" type="number" step="0.001" min="0.001" placeholder="Miqdor" />
         <input class="field" id="in-buy" type="number" step="0.01" min="0" placeholder="Xarid narxi" />
         <button class="btn btn-ghost" type="button" id="in-add">Qator qo‘shish</button>
       </div>
@@ -2006,6 +2690,7 @@ async function renderApp() {
     dashboard: pageDashboard,
     products: pageProducts,
     stock: pageStock,
+    opname: pageOpname,
     pos: pagePos,
     sales: pageSales,
     hisobotlar: pageHisobotlar,
@@ -2057,6 +2742,14 @@ function bindApp(page) {
     document.getElementById("p-barcode-auto")?.addEventListener("click", () => {
       if (pForm.barcode) pForm.barcode.value = makeBarcode();
     });
+    document.getElementById("p-prev")?.addEventListener("click", () => {
+      window.__prodPage = Math.max(1, Number(window.__prodPage || 1) - 1);
+      render();
+    });
+    document.getElementById("p-next")?.addEventListener("click", () => {
+      window.__prodPage = Math.max(1, Number(window.__prodPage || 1) + 1);
+      render();
+    });
     pForm.onsubmit = async (e) => {
       e.preventDefault();
       const err = document.getElementById("p-err");
@@ -2088,13 +2781,16 @@ function bindApp(page) {
       const payload = {
         name,
         barcode,
-        sku: f.sku,
+        sku: f.sku || "",
+        category_id: f.category_id ? Number(f.category_id) : null,
+        manufacturer: (f.manufacturer || "").trim(),
         sell_price: sell,
         buy_price: buy,
-        stock: Number(f.stock || 0),
         min_stock: Number(f.min_stock || 0),
         unit: f.unit || "dona",
+        is_active: Boolean(pForm.elements.is_active?.checked),
       };
+      if (!f.id) payload.stock = Number(f.stock || 0);
       try {
         if (f.id) await api(`/api/products/${f.id}`, { method: "PATCH", body: JSON.stringify(payload) });
         else await api("/api/products", { method: "POST", body: JSON.stringify(payload) });
@@ -2116,9 +2812,14 @@ function bindApp(page) {
         pForm.name.value = p.name;
         pForm.barcode.value = p.barcode || "";
         pForm.sku.value = p.sku || "";
+        if (pForm.category_id) pForm.category_id.value = p.category_id || "";
+        if (pForm.manufacturer) pForm.manufacturer.value = p.manufacturer || "";
         pForm.sell_price.value = p.sell_price;
         pForm.buy_price.value = p.buy_price;
-        pForm.stock.value = p.stock;
+        if (pForm.stock) pForm.stock.value = "";
+        const stockWrap = document.getElementById("p-stock-wrap");
+        if (stockWrap) stockWrap.hidden = true;
+        if (pForm.elements.is_active) pForm.elements.is_active.checked = p.is_active !== false;
         pForm.min_stock.value = p.min_stock;
         pForm.unit.value = p.unit;
         document.getElementById("p-save").textContent = "Yangilash";
@@ -2132,6 +2833,21 @@ function bindApp(page) {
         const barcode = tr.dataset.barcode || "";
         tr.hidden = Boolean(q) && !name.includes(q) && !barcode.includes(q);
       });
+    });
+    document.querySelectorAll("[data-history]").forEach((btn) => {
+      btn.onclick = () => {
+        const p = (window.__products || []).find((x) => x.id === Number(btn.dataset.history));
+        if (p) {
+          window.__stockHist = { page: 1, kind: "", product: p };
+          openStockHistory(p);
+        }
+      };
+    });
+    document.querySelectorAll("[data-adjust]").forEach((btn) => {
+      btn.onclick = () => {
+        const p = (window.__products || []).find((x) => x.id === Number(btn.dataset.adjust));
+        if (p) openStockAdjust(p);
+      };
     });
     document.querySelectorAll("[data-toggle]").forEach((btn) => {
       btn.onclick = async () => {
@@ -2220,6 +2936,8 @@ function bindApp(page) {
         document.querySelector(".empty-warn")?.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
       }
+      const inBtn = inForm.querySelector("button[type=submit]");
+      if (inBtn) inBtn.disabled = true;
       try {
         await api("/api/stock-ins", {
           method: "POST",
@@ -2236,6 +2954,7 @@ function bindApp(page) {
         render();
       } catch (ex) {
         stockFormError(ex.message);
+        if (inBtn) inBtn.disabled = false;
       }
     };
     document.querySelectorAll("[data-doc]").forEach((row) => {

@@ -1,5 +1,37 @@
 # FIXEN POS Architecture Audit
 
+## Phase 2 Step 6D follow-up (2026-09-19)
+
+Stock opname **finalize**: `POST /api/stock-opnames/{id}/finalize`. Atomic OPEN→POSTED via existing `move_stock(kind=ADJUST, ref_type=opname)`. Live stock + snapshot difference. Full rollback on any line failure. UI «Санашни якунлаш». Tests: `backend/tests/test_phase2_opname_finalize.py`. Do not start cancel.
+
+## Phase 2 Step 6C follow-up (2026-09-19)
+
+Stock opname **UI**: `#/app/opname` Sanash list/create/detail. Reuses 6B API. Snapshot displayed, difference preview only. No finalize/cancel, no `move_stock`. Do not start Step 6D.
+
+## Phase 2 Step 6B follow-up (2026-09-19)
+
+Stock opname **OPEN API**: create/list/detail + line add/patch/delete. HQ write forbidden (`forbid_company_kirim_write`). Snapshot `system_qty` at line-add. No finalize, no cancel, no UI, no `move_stock`. Tests: `backend/tests/test_phase2_opname_api.py`. 141 passed / 0 failed. Do not start Step 6C.
+
+## Phase 2 Step 6A follow-up (2026-09-19)
+
+Stock opname **database foundation only**: `stock_opnames` + `stock_opname_lines`. Partial unique one OPEN per store; unique product per opname. `ensure_schema` additive. No API, no UI, no finalize, no `move_stock` change. Tests: `backend/tests/test_phase2_opname_schema.py`. 133 passed / 0 failed. Do not start Step 6B.
+
+## Phase 2 Step 5 follow-up (2026-09-18)
+
+Transfer harden: `qty > 0`, atomic TRANSFER_OUT+IN via `move_stock`, source stock check, dest match by non-empty barcode/SKU, `GET /api/transfers/{id}`, `GET /api/transfer-stores`, audit payload. Kirim qty > 0. STORE `GET /api/stores` still 403. Status stays `DONE`. Tests: `backend/tests/test_phase2_transfers.py`.
+
+## Phase 2 Step 4 follow-up (2026-09-18)
+
+Dedicated stock adjustment: `POST /api/stock-adjustments` (difference-based `qty`) through existing `move_stock(kind=ADJUST)`. Product PATCH ignores `stock`. Audit `stock.adjust`. No second ledger. Idempotency not added (sale keys only). Tests: `backend/tests/test_phase2_stock_adjust.py`.
+
+## Phase 2 Step 3 follow-up (2026-09-18)
+
+Read-only stock ledger API `GET /api/stock-movements` + Products «Tarix» UI. Uses existing `stock_movements` / `move_stock`. Tests: `backend/tests/test_phase2_stock_history.py`.
+
+## Phase 2 Step 2 follow-up (2026-09-18)
+
+Product master + SKU/barcode foundation. Unique partial indexes on barcode/SKU per store; product list pagination (max 500); exact barcode search first; category on form + company check; `joinedload` category. `move_stock` unchanged. Variants/warehouse not started. Tests: `backend/tests/test_phase2_products.py`.
+
 ## Phase 1 follow-up (2026-09-18)
 
 Core POS stabilization (no loyalty/omnichannel/exchange module):
@@ -44,7 +76,7 @@ FIXEN POS is a **FastAPI monolith** that serves a **vanilla JS SPA** from `backe
 
 The product vision is an AI-powered retail operating system. The **live system is a working Core POS + partial Business + early Intelligence**. It is not yet omnichannel, not variant-aware, not PostgreSQL-migrated, and not a full AI business assistant.
 
-**Architecture compliance score: 74 / 100**. Phase 0 + HIGH security closed. Phase 1 Core POS stabilization (2026-09-18): tax-inclusive QQS, receipt/report parity, cashier discount cap, mixed payment rules, idempotent sale, return bounds, POS hotkeys.
+**Architecture compliance score: 84 / 100**. Phase 0 + HIGH + Phase 1. Phase 2 Steps 1–6D: product master, ledger, ADJUST, transfer, opname OPEN+UI+finalize. Remaining: opname cancel, write-off, warehouse, variants.
 
 Phase 0 + HIGH closed previous CRITICAL/HIGH security items. Remaining: incomplete audit coverage, SQLite, GET demo-pay read (no activate).
 
@@ -95,7 +127,7 @@ Legend: **EXISTS** | **PARTIAL** | **MISSING** | **PLANNED** (vision only) | **U
 | 1 | POS / Sales | EXISTS | `routers_pos.py`, `#/app/pos` |
 | 2 | Products | PARTIAL | CRUD + barcode; no variants/brand/image/wholesale as first-class |
 | 3 | Barcode | EXISTS | scan UI, autogen EAN-13, JsBarcode cennik |
-| 4 | Inventory | PARTIAL | IN/SALE/RETURN/TRANSFER; no opname/write-off/ADJUST API/warehouse entity |
+| 4 | Inventory | PARTIAL | IN/SALE/RETURN/TRANSFER/ADJUST + opname finalize (6D); no cancel/write-off/warehouse |
 | 5 | Payments | PARTIAL | cash/card/online/credit fields; no retail PSP |
 | 6 | Returns | PARTIAL | full/partial return; no exchange |
 | 7 | CRM | PARTIAL | profile, debt, ledger, sales; no loyalty/360 extras |
@@ -545,7 +577,7 @@ Do not mix these four buckets.
 - Monolithic routers (`routers_saas.py` ~37KB, `routers_ops.py` ~26KB, `app.js` ~109KB)
 - SPA full-page innerHTML rerenders
 - SQLite `ensure_schema` instead of migrations
-- Stock PATCH uses ledger ADJUST (Phase 0); opname/write-off still missing
+- Stock PATCH uses ledger ADJUST (Phase 0); opname finalize via `move_stock` ADJUST (6D); cancel/write-off still missing
 - Unversioned API
 - STORE role vs documented RBAC
 - Username global unique
@@ -601,7 +633,7 @@ The **vision** order puts Multi-store at PHASE 7. **This codebase already has Mu
 
 ## 19. Architecture Compliance Score
 
-**Score: 74 / 100** (was 70 after HIGH, 66 after Phase 0)
+**Score: 84 / 100** (was 83 after Step 6C, 82 after Step 6B, 81 after Step 6A, 80 after Step 5)
 
 Technical alignment with master architecture only.
 
@@ -612,11 +644,11 @@ Technical alignment with master architecture only.
 | Tenant isolation | 78 | Filters exist; billing holes |
 | RBAC | 70 | Works; STORE delta; stale JWT claims |
 | POS checkout integrity | 82 | Inclusive QQS on sale/receipt/dashboard; cashier discount cap; idempotency |
-| Inventory auditability | 62 | PATCH stock uses ledger ADJUST; opname/write-off still missing |
+| Inventory auditability | 82 | ADJUST + transfer + opname finalize (6D); cancel/write-off still missing |
 | CRM 360 | 48 | Debt yes; loyalty no |
 | Payments architecture | 42 | Fields yes; integration layer weak |
 | API design | 60 | REST+RBAC; unversioned; fat routers |
-| Database / migrations | 52 | ORM ok; SQLite extras; no Alembic |
+| Database / migrations | 54 | ORM ok; SQLite extras + opname tables; still no Alembic |
 | Security posture | 78 | Phase 0 + HIGH hardening (CORS, rate-limit, reset-password, JWT cid) |
 | AI readiness | 55 | Scoped tools; not BOS |
 | Omnichannel | 28 | Web yes; mobile partial |

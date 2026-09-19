@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -73,6 +73,27 @@ class Category(Base):
 
 class Product(Base):
     __tablename__ = "products"
+    __table_args__ = (
+        Index(
+            "uq_products_company_store_barcode",
+            "company_id",
+            "store_id",
+            "barcode",
+            unique=True,
+            sqlite_where=text("barcode != ''"),
+            postgresql_where=text("barcode <> ''"),
+        ),
+        Index(
+            "uq_products_company_store_sku",
+            "company_id",
+            "store_id",
+            "sku",
+            unique=True,
+            sqlite_where=text("sku != ''"),
+            postgresql_where=text("sku <> ''"),
+        ),
+    )
+
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
@@ -224,6 +245,14 @@ class Supplier(Base):
 
 class StockMovement(Base):
     __tablename__ = "stock_movements"
+    __table_args__ = (
+        Index(
+            "ix_stock_movements_company_store_created",
+            "company_id",
+            "store_id",
+            "created_at",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
@@ -264,6 +293,62 @@ class StockTransferItem(Base):
     qty: Mapped[float] = mapped_column(Float)
 
     transfer: Mapped[StockTransfer] = relationship(back_populates="items")
+
+
+class StockOpname(Base):
+    """Inventory count session. No stock writes here — finalize (later) uses move_stock ADJUST."""
+
+    __tablename__ = "stock_opnames"
+    __table_args__ = (
+        Index(
+            "ix_stock_opnames_company_store_created",
+            "company_id",
+            "store_id",
+            "created_at",
+        ),
+        Index(
+            "uq_stock_opnames_company_store_open",
+            "company_id",
+            "store_id",
+            unique=True,
+            sqlite_where=text("status = 'OPEN'"),
+            postgresql_where=text("status = 'OPEN'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
+    number: Mapped[str] = mapped_column(String(40), default="")
+    status: Mapped[str] = mapped_column(String(32), default="OPEN")
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    lines: Mapped[list["StockOpnameLine"]] = relationship(back_populates="opname")
+
+
+class StockOpnameLine(Base):
+    __tablename__ = "stock_opname_lines"
+    __table_args__ = (
+        Index(
+            "uq_stock_opname_lines_opname_product",
+            "opname_id",
+            "product_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opname_id: Mapped[int] = mapped_column(ForeignKey("stock_opnames.id"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    system_qty: Mapped[float] = mapped_column(Float, default=0)
+    counted_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    difference: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    opname: Mapped[StockOpname] = relationship(back_populates="lines")
 
 
 class CustomerLedger(Base):
