@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, joinedload
 
-from .audit import write_audit
 from .db import get_db
 from .deps import current_store, require_perm
 from .ledger import move_stock
@@ -9,6 +10,9 @@ from .models import Category, Product, User
 from .schemas import CategoryIn, ProductIn, ProductOut
 
 router = APIRouter(prefix="/api", tags=["catalog"])
+
+PRODUCT_LIST_DEFAULT = 200
+PRODUCT_LIST_MAX = 500
 
 
 def _ean13(digits12: str) -> str:
@@ -18,10 +22,19 @@ def _ean13(digits12: str) -> str:
 
 def generate_unique_barcode(db, company_id, store_id) -> str:
     import random
+
     for _ in range(40):
         body = "200" + f"{random.randint(0, 999_999_999):09d}"
         code = _ean13(body)
-        exists = db.query(Product).filter(Product.company_id==company_id, Product.store_id==store_id, Product.barcode==code).first()
+        exists = (
+            db.query(Product)
+            .filter(
+                Product.company_id == company_id,
+                Product.store_id == store_id,
+                Product.barcode == code,
+            )
+            .first()
+        )
         if not exists:
             return code
     raise HTTPException(500, "Barcode yaratib bo'lmadi")
@@ -46,6 +59,55 @@ def product_out(p: Product) -> ProductOut:
     )
 
 
+def _resolve_category(db: Session, user: User, category_id):
+    if category_id in (None, "", 0):
+        return None
+    try:
+        cid = int(category_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Kategoriya noto'g'ri")
+    cat = db.get(Category, cid)
+    if not cat or cat.company_id != user.company_id:
+        raise HTTPException(400, "Kategoriya topilmadi")
+    return cat
+
+
+def _barcode_taken(db, company_id, store_id, barcode, exclude_id=None) -> bool:
+    code = (barcode or "").strip()
+    if not code:
+        return False
+    q = db.query(Product).filter(
+        Product.company_id == company_id,
+        Product.store_id == store_id,
+        Product.barcode == code,
+    )
+    if exclude_id:
+        q = q.filter(Product.id != exclude_id)
+    return q.first() is not None
+
+
+def _sku_taken(db, company_id, store_id, sku, exclude_id=None) -> bool:
+    code = (sku or "").strip()
+    if not code:
+        return False
+    q = db.query(Product).filter(
+        Product.company_id == company_id,
+        Product.store_id == store_id,
+        Product.sku == code,
+    )
+    if exclude_id:
+        q = q.filter(Product.id != exclude_id)
+    return q.first() is not None
+
+
+def _commit_product(db: Session):
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Bu barcode yoki SKU allaqachon bor")
+
+
 @router.get("/categories")
 def list_categories(user: User = Depends(require_perm("products")), db: Session = Depends(get_db)):
     rows = db.query(Category).filter(Category.company_id == user.company_id).order_by(Category.name).all()
@@ -58,7 +120,10 @@ def create_category(
     user: User = Depends(require_perm("products")),
     db: Session = Depends(get_db),
 ):
-    cat = Category(company_id=user.company_id, name=body.name.strip())
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Kategoriya nomi bo'sh")
+    cat = Category(company_id=user.company_id, name=name)
     db.add(cat)
     db.commit()
     db.refresh(cat)
@@ -67,19 +132,48 @@ def create_category(
 
 @router.get("/products", response_model=list[ProductOut])
 def list_products(
+    response: Response,
     q: str = "",
     barcode: str = "",
+    page: int = Query(1, ge=1),
+    limit: int = Query(PRODUCT_LIST_DEFAULT, ge=1),
     user: User = Depends(require_perm("products")),
     db: Session = Depends(get_db),
 ):
     store = current_store(user, db)
-    query = db.query(Product).filter(Product.company_id == user.company_id, Product.store_id == store.id)
-    if barcode.strip():
-        query = query.filter(Product.barcode == barcode.strip())
-    elif q.strip():
-        like = f"%{q.strip()}%"
-        query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)) | (Product.sku.ilike(like)))
-    rows = query.order_by(Product.name).all()
+    limit = min(int(limit), PRODUCT_LIST_MAX)
+    page = max(int(page), 1)
+    offset = (page - 1) * limit
+    base = db.query(Product).filter(Product.company_id == user.company_id, Product.store_id == store.id)
+    term = (q or "").strip()
+    code = (barcode or "").strip()
+    query = base
+    if code:
+        query = query.filter(Product.barcode == code)
+    elif term:
+        exact = base.filter(Product.barcode == term)
+        if exact.limit(1).first() is not None:
+            query = exact
+        else:
+            like = f"%{term}%"
+            query = query.filter(
+                or_(
+                    Product.name.ilike(like),
+                    Product.barcode.ilike(like),
+                    Product.sku.ilike(like),
+                )
+            )
+    total = query.count()
+    rows = (
+        query.options(joinedload(Product.category))
+        .order_by(Product.name, Product.id)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Page"] = str(page)
+    response.headers["X-Limit"] = str(limit)
     return [product_out(p) for p in rows]
 
 
@@ -90,28 +184,25 @@ def create_product(
     db: Session = Depends(get_db),
 ):
     store = current_store(user, db)
+    cat = _resolve_category(db, user, body.category_id)
+    sku = (body.sku or "").strip()
     barcode = (body.barcode or "").strip() or generate_unique_barcode(db, user.company_id, store.id)
-    dup = (
-        db.query(Product)
-        .filter(
-            Product.company_id == user.company_id,
-            Product.store_id == store.id,
-            Product.barcode == barcode,
-        )
-        .first()
-    )
-    if dup:
+    if _barcode_taken(db, user.company_id, store.id, barcode):
         raise HTTPException(409, "Bu barcode allaqachon bor")
+    if _sku_taken(db, user.company_id, store.id, sku):
+        raise HTTPException(409, "Bu SKU allaqachon bor")
     opening = float(body.stock or 0)
     data = body.model_dump()
     data["stock"] = 0
     data["barcode"] = barcode
+    data["sku"] = sku
+    data["category_id"] = cat.id if cat else None
     p = Product(company_id=user.company_id, store_id=store.id, **data)
     db.add(p)
     db.flush()
     if opening:
         move_stock(db, p, opening, user=user, store_id=store.id, kind="OPENING", ref_type="product", ref_id=p.id)
-    db.commit()
+    _commit_product(db)
     db.refresh(p)
     return product_out(p)
 
@@ -128,53 +219,27 @@ def update_product(
     if not p or p.company_id != user.company_id or p.store_id != store.id:
         raise HTTPException(404, "Mahsulot topilmadi")
     data = body.model_dump(exclude_unset=True)
-    requested_stock = data.pop("stock", None)
+    data.pop("stock", None)
+    if "category_id" in data:
+        cat = _resolve_category(db, user, data.get("category_id"))
+        data["category_id"] = cat.id if cat else None
+    if "sku" in data:
+        sku = (data.get("sku") or "").strip()
+        data["sku"] = sku
+        if _sku_taken(db, user.company_id, store.id, sku, exclude_id=p.id):
+            raise HTTPException(409, "Bu SKU allaqachon bor")
     barcode = (body.barcode or "").strip() if "barcode" in data else None
     if barcode is None:
         pass
     elif not barcode:
         data.pop("barcode", None)
     else:
-        dup = (
-            db.query(Product)
-            .filter(
-                Product.company_id == user.company_id,
-                Product.store_id == store.id,
-                Product.barcode == barcode,
-                Product.id != p.id,
-            )
-            .first()
-        )
-        if dup:
+        if _barcode_taken(db, user.company_id, store.id, barcode, exclude_id=p.id):
             raise HTTPException(409, "Bu barcode allaqachon bor")
         data["barcode"] = barcode
     for key, val in data.items():
         setattr(p, key, val)
-    if requested_stock is not None:
-        old_stock = float(p.stock or 0)
-        new_stock = float(requested_stock or 0)
-        delta = round(new_stock - old_stock, 3)
-        if abs(delta) > 0.0001:
-            move_stock(
-                db,
-                p,
-                delta,
-                user=user,
-                store_id=store.id,
-                kind="ADJUST",
-                note="product.patch",
-                ref_type="product",
-                ref_id=p.id,
-            )
-            write_audit(
-                db,
-                user,
-                "product.stock.adjust",
-                entity="product",
-                entity_id=p.id,
-                payload={"old": old_stock, "new": float(p.stock or 0), "delta": delta},
-            )
-    db.commit()
+    _commit_product(db)
     db.refresh(p)
     return product_out(p)
 

@@ -102,6 +102,7 @@ class StockInCreate(BaseModel):
     supplier: str = ""
     note: str = ""
     items: list[StockInItemIn]
+    idempotency_key: Optional[str] = None
 
 
 class CartItemIn(BaseModel):
@@ -147,7 +148,7 @@ class SupplierIn(BaseModel):
 
 class TransferItemIn(BaseModel):
     product_id: int
-    qty: float = Field(gt=0)
+    qty: float
 
 
 class StockAdjustIn(BaseModel):

@@ -64,10 +64,21 @@ def pos_products(
         Product.store_id == store.id,
         Product.is_active.is_(True),
     )
-    if q.strip():
-        like = f"%{q.strip()}%"
-        query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)) | (Product.sku.ilike(like)))
-    rows = query.order_by(Product.name).limit(80).all()
+    term = (q or "").strip()
+    if term:
+        exact = query.filter(Product.barcode == term).order_by(Product.name).limit(80).all()
+        if exact:
+            rows = exact
+        else:
+            like = f"%{term}%"
+            rows = (
+                query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)) | (Product.sku.ilike(like)))
+                .order_by(Product.name)
+                .limit(80)
+                .all()
+            )
+    else:
+        rows = query.order_by(Product.name).limit(80).all()
     return [
         {
             "id": p.id,

@@ -337,7 +337,7 @@ def test_product_patch_fields_do_not_bypass_ledger(client):
     finally:
         db.close()
 
-    adjusted = api.patch(
+    ignored = api.patch(
         f"/api/products/{pid}",
         headers=headers,
         json={
@@ -351,8 +351,15 @@ def test_product_patch_fields_do_not_bypass_ledger(client):
             "unit": "quti",
         },
     )
+    assert ignored.status_code == 200, ignored.text
+    assert ignored.json()["stock"] == 10
+    adjusted = api.post(
+        "/api/stock-adjustments",
+        headers=headers,
+        json={"product_id": pid, "qty": 5, "reason": "Physical count plus"},
+    )
     assert adjusted.status_code == 200, adjusted.text
-    assert adjusted.json()["stock"] == 15
+    assert adjusted.json()["stock_after"] == 15
     db = Session()
     try:
         rows = db.query(StockMovement).filter(StockMovement.product_id == pid).order_by(StockMovement.id).all()
@@ -361,7 +368,8 @@ def test_product_patch_fields_do_not_bypass_ledger(client):
         assert rows[-1].balance_after == 15
         assert db.get(Product, pid).stock == 15
         actions = [a.action for a in db.query(AuditLog).filter(AuditLog.entity_id == pid).all()]
-        assert "product.stock.adjust" in actions
+        assert "stock.adjust" in actions
+        assert "product.stock.adjust" not in actions
     finally:
         db.close()
 

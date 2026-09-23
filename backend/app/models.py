@@ -117,6 +117,17 @@ class Product(Base):
 
 class StockIn(Base):
     __tablename__ = "stock_ins"
+    __table_args__ = (
+        Index(
+            "uq_stock_ins_company_store_idempotency",
+            "company_id",
+            "store_id",
+            "idempotency_key",
+            unique=True,
+            sqlite_where=text("idempotency_key IS NOT NULL AND idempotency_key != ''"),
+            postgresql_where=text("idempotency_key IS NOT NULL AND idempotency_key != ''"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
@@ -126,6 +137,7 @@ class StockIn(Base):
     supplier: Mapped[str] = mapped_column(String(200), default="")
     total: Mapped[float] = mapped_column(Float, default=0)
     note: Mapped[str] = mapped_column(Text, default="")
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     items: Mapped[list["StockInItem"]] = relationship(back_populates="stock_in", cascade="all, delete-orphan")

@@ -1061,54 +1061,68 @@ function bindOpnameDetail() {
   });
   search?.addEventListener("blur", () => setTimeout(hideDrop, 180));
 
+  const saveOpCountedInput = async (inp, force) => {
+    const raw = inp.value.trim();
+    const saved = inp.dataset.saved ?? "";
+    const st = document.querySelector(`[data-st="${inp.dataset.line}"]`);
+    if (raw === saved) {
+      inp.classList.remove("dirty");
+      return;
+    }
+    if (raw === "") {
+      inp.value = saved;
+      inp.classList.remove("dirty");
+      paintOpDiff(inp);
+      return;
+    }
+    const n = Number(raw);
+    if (!(n === n) || n < 0) {
+      if (st) st.textContent = "xato";
+      const err = new Error("Sanangan miqdor noto'g'ri");
+      err._opnameCounted = true;
+      throw err;
+    }
+    if (!force && window.__opnameBusy) return;
+    if (!force) window.__opnameBusy = true;
+    inp.disabled = true;
+    if (st) st.textContent = "saqlanmoqda…";
+    try {
+      const out = await api(
+        "/api/stock-opnames/" + window.__opnameDoc.id + "/lines/" + inp.dataset.line,
+        { method: "PATCH", body: JSON.stringify({ counted_qty: n }) },
+      );
+      const v = out.counted_qty === null || out.counted_qty === undefined ? "" : String(out.counted_qty);
+      inp.value = v;
+      inp.dataset.saved = v;
+      inp.classList.remove("dirty");
+      paintOpDiff(inp);
+      if (st) st.textContent = "saqlandi";
+      setTimeout(() => {
+        if (st && st.textContent === "saqlandi") st.textContent = "";
+      }, 1200);
+    } catch (ex) {
+      if (st) st.textContent = opnameMapErr(ex);
+      throw ex;
+    } finally {
+      inp.disabled = false;
+      if (!force) window.__opnameBusy = false;
+    }
+  };
+  async function flushOpnameCountedInputs() {
+    const inputs = Array.from(document.querySelectorAll(".op-counted"));
+    for (const inp of inputs) {
+      await saveOpCountedInput(inp, true);
+    }
+  }
   document.querySelectorAll(".op-counted").forEach((inp) => {
     inp.addEventListener("input", () => {
       const saved = inp.dataset.saved ?? "";
       inp.classList.toggle("dirty", inp.value !== saved);
       paintOpDiff(inp);
     });
-    const save = async () => {
-      const raw = inp.value.trim();
-      const saved = inp.dataset.saved ?? "";
-      const st = document.querySelector(`[data-st="${inp.dataset.line}"]`);
-      if (raw === saved) return;
-      if (raw === "") {
-        inp.value = saved;
-        inp.classList.remove("dirty");
-        paintOpDiff(inp);
-        return;
-      }
-      const n = Number(raw);
-      if (!(n === n) || n < 0) {
-        if (st) st.textContent = "xato";
-        return;
-      }
-      if (window.__opnameBusy) return;
-      window.__opnameBusy = true;
-      inp.disabled = true;
-      if (st) st.textContent = "saqlanmoqda…";
-      try {
-        const out = await api(
-          "/api/stock-opnames/" + window.__opnameDoc.id + "/lines/" + inp.dataset.line,
-          { method: "PATCH", body: JSON.stringify({ counted_qty: n }) },
-        );
-        const v = out.counted_qty === null || out.counted_qty === undefined ? "" : String(out.counted_qty);
-        inp.value = v;
-        inp.dataset.saved = v;
-        inp.classList.remove("dirty");
-        paintOpDiff(inp);
-        if (st) st.textContent = "saqlandi";
-        setTimeout(() => {
-          if (st && st.textContent === "saqlandi") st.textContent = "";
-        }, 1200);
-      } catch (ex) {
-        if (st) st.textContent = opnameMapErr(ex);
-      } finally {
-        inp.disabled = false;
-        window.__opnameBusy = false;
-      }
-    };
-    inp.addEventListener("blur", save);
+    inp.addEventListener("blur", () => {
+      saveOpCountedInput(inp, false).catch(() => {});
+    });
     inp.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -1157,6 +1171,7 @@ function bindOpnameDetail() {
     if (btn) btn.disabled = true;
     window.__opnameBusy = true;
     try {
+      await flushOpnameCountedInputs();
       await api("/api/stock-opnames/" + window.__opnameDoc.id + "/finalize", { method: "POST" });
       await reloadOpnameDetail();
     } catch (ex) {
@@ -2963,13 +2978,21 @@ function bindApp(page) {
         return;
       }
       const inBtn = inForm.querySelector("button[type=submit]");
+      if (window.__stockBusy || inBtn?.disabled) return;
       if (inBtn) inBtn.disabled = true;
+      window.__stockBusy = true;
+      if (!window.__stock.idem) {
+        window.__stock.idem =
+          (crypto.randomUUID && crypto.randomUUID()) ||
+          "k-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      }
       try {
         await api("/api/stock-ins", {
           method: "POST",
           body: JSON.stringify({
             supplier: f.supplier,
             note: f.note,
+            idempotency_key: String(window.__stock.idem).slice(0, 64),
             items: window.__stock.lines.map((l) => ({
               product_id: l.product_id,
               qty: l.qty,
@@ -2977,10 +3000,13 @@ function bindApp(page) {
             })),
           }),
         });
+        window.__stock.idem = "";
         render();
       } catch (ex) {
         stockFormError(ex.message);
         if (inBtn) inBtn.disabled = false;
+      } finally {
+        window.__stockBusy = false;
       }
     };
     document.querySelectorAll("[data-doc]").forEach((row) => {

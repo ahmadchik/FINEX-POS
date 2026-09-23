@@ -535,6 +535,18 @@ def patch_supplier(
     return {"id": s.id, "name": s.name}
 
 
+@saas_router.get("/transfer-stores")
+def list_transfer_stores(user: User = Depends(require_perm("stock")), db: Session = Depends(get_db)):
+    """id+name only for transfer UI. Does not replace GET /api/stores (still stores-perm)."""
+    rows = (
+        db.query(Store)
+        .filter(Store.company_id == user.company_id, Store.is_active.is_(True))
+        .order_by(Store.id)
+        .all()
+    )
+    return [{"id": s.id, "name": s.name, "current": s.id == user.store_id} for s in rows]
+
+
 @saas_router.post("/transfers")
 def create_transfer(body: TransferCreate, user: User = Depends(require_perm("stock")), db: Session = Depends(get_db)):
     _writable(db, user)
@@ -543,7 +555,14 @@ def create_transfer(body: TransferCreate, user: User = Depends(require_perm("sto
         raise HTTPException(403, "Faqat o'z do'koningizdan o'tkazma qilishingiz mumkin")
     src = db.get(Store, body.from_store_id)
     dst = db.get(Store, body.to_store_id)
-    if not src or not dst or src.company_id != user.company_id or dst.company_id != user.company_id:
+    if (
+        not src
+        or not dst
+        or src.company_id != user.company_id
+        or dst.company_id != user.company_id
+        or not src.is_active
+        or not dst.is_active
+    ):
         raise HTTPException(400, "Do'kon noto'g'ri")
     if src.id == dst.id:
         raise HTTPException(400, "Bir xil do'kon")
@@ -555,20 +574,52 @@ def create_transfer(body: TransferCreate, user: User = Depends(require_perm("sto
         from_store_id=src.id,
         to_store_id=dst.id,
         number=f"TR-{count:06d}",
-        note=body.note or "",
+        note=(body.note or "")[:300],
         status="DONE",
     )
     db.add(doc)
     db.flush()
+    audit_items = []
+    note_base = (body.note or "").strip()
     for row in body.items:
+        try:
+            qty = float(row.qty)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Miqdor noto'g'ri")
+        if qty != qty or abs(qty) == float("inf") or qty <= 0:
+            raise HTTPException(400, "Miqdor 0 dan katta bo'lsin")
+        qty = round(qty, 3)
         product = db.get(Product, row.product_id)
         if not product or product.company_id != user.company_id or product.store_id != src.id:
             raise HTTPException(404, "Mahsulot topilmadi")
-        dest = (
-            db.query(Product)
-            .filter(Product.company_id == user.company_id, Product.store_id == dst.id, Product.barcode == product.barcode)
-            .first()
-        )
+        if not product.is_active:
+            raise HTTPException(400, "Mahsulot nofaol")
+        have = float(product.stock or 0)
+        if have + 0.0001 < qty:
+            raise HTTPException(400, f"{product.name}: qoldiq yetarli emas ({product.stock})")
+        barcode = (product.barcode or "").strip()
+        sku = (product.sku or "").strip()
+        dest = None
+        if barcode:
+            dest = (
+                db.query(Product)
+                .filter(
+                    Product.company_id == user.company_id,
+                    Product.store_id == dst.id,
+                    Product.barcode == barcode,
+                )
+                .first()
+            )
+        elif sku:
+            dest = (
+                db.query(Product)
+                .filter(
+                    Product.company_id == user.company_id,
+                    Product.store_id == dst.id,
+                    Product.sku == sku,
+                )
+                .first()
+            )
         if not dest:
             dest = Product(
                 company_id=user.company_id,
@@ -588,12 +639,53 @@ def create_transfer(body: TransferCreate, user: User = Depends(require_perm("sto
             )
             db.add(dest)
             db.flush()
-        move_stock(db, product, -row.qty, user=user, store_id=src.id, kind="TRANSFER_OUT", ref_type="transfer", ref_id=doc.id)
-        move_stock(db, dest, row.qty, user=user, store_id=dst.id, kind="TRANSFER_IN", ref_type="transfer", ref_id=doc.id)
-        db.add(StockTransferItem(transfer_id=doc.id, product_id=product.id, dest_product_id=dest.id, qty=row.qty))
-    write_audit(db, user, "transfer.create", entity="transfer", entity_id=doc.id)
+        out_note = f"→ {dst.name}" + (f" · {note_base}" if note_base else "")
+        in_note = f"← {src.name}" + (f" · {note_base}" if note_base else "")
+        move_stock(
+            db,
+            product,
+            -qty,
+            user=user,
+            store_id=src.id,
+            kind="TRANSFER_OUT",
+            note=out_note[:300],
+            ref_type="transfer",
+            ref_id=doc.id,
+        )
+        move_stock(
+            db,
+            dest,
+            qty,
+            user=user,
+            store_id=dst.id,
+            kind="TRANSFER_IN",
+            note=in_note[:300],
+            ref_type="transfer",
+            ref_id=doc.id,
+        )
+        db.add(StockTransferItem(transfer_id=doc.id, product_id=product.id, dest_product_id=dest.id, qty=qty))
+        audit_items.append(
+            {
+                "product_id": product.id,
+                "dest_product_id": dest.id,
+                "qty": qty,
+            }
+        )
+    write_audit(
+        db,
+        user,
+        "transfer.create",
+        entity="transfer",
+        entity_id=doc.id,
+        payload={
+            "from_store_id": src.id,
+            "to_store_id": dst.id,
+            "number": doc.number,
+            "items": audit_items,
+        },
+    )
     db.commit()
-    return {"id": doc.id, "number": doc.number}
+    return {"id": doc.id, "number": doc.number, "from_store_id": src.id, "to_store_id": dst.id}
 
 
 @saas_router.get("/transfers")
@@ -610,12 +702,49 @@ def list_transfers(user: User = Depends(require_perm("stock")), db: Session = De
         {
             "id": t.id,
             "number": t.number,
+            "from_store_id": t.from_store_id,
+            "to_store_id": t.to_store_id,
             "from_store": names.get(t.from_store_id, ""),
             "to_store": names.get(t.to_store_id, ""),
             "created_at": t.created_at.isoformat() if t.created_at else None,
         }
         for t in rows
     ]
+
+
+@saas_router.get("/transfers/{transfer_id}")
+def get_transfer(transfer_id: int, user: User = Depends(require_perm("stock")), db: Session = Depends(get_db)):
+    doc = db.get(StockTransfer, transfer_id)
+    if not doc or doc.company_id != user.company_id:
+        raise HTTPException(404, "Hujjat topilmadi")
+    names = {s.id: s.name for s in db.query(Store).filter(Store.company_id == user.company_id)}
+    product_ids = {i.product_id for i in doc.items} | {i.dest_product_id for i in doc.items if i.dest_product_id}
+    products = {
+        p.id: p
+        for p in db.query(Product)
+        .filter(Product.company_id == user.company_id, Product.id.in_(product_ids))
+        .all()
+    } if product_ids else {}
+    return {
+        "id": doc.id,
+        "number": doc.number,
+        "status": doc.status,
+        "note": doc.note or "",
+        "from_store_id": doc.from_store_id,
+        "to_store_id": doc.to_store_id,
+        "from_store": names.get(doc.from_store_id, ""),
+        "to_store": names.get(doc.to_store_id, ""),
+        "created_at": doc.created_at.isoformat() if doc.created_at else None,
+        "items": [
+            {
+                "product_id": i.product_id,
+                "dest_product_id": i.dest_product_id,
+                "name": (products.get(i.product_id).name if products.get(i.product_id) else ""),
+                "qty": i.qty,
+            }
+            for i in doc.items
+        ],
+    }
 
 
 @saas_router.get("/customers/{customer_id}")

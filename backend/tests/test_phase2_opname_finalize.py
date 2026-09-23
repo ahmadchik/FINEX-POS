@@ -1,13 +1,15 @@
 """Phase 2 Step 6D — stock opname finalize / atomic reconciliation."""
 
 from datetime import datetime, timedelta
+from pathlib import Path
+import asyncio
 import json
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.db import Base, get_db
 from app.main import app
@@ -623,3 +625,124 @@ def test_audit_only_on_successful_finalize(client):
     payload = json.loads(logs[0].payload or "{}")
     assert payload["opname_id"] == ok_doc["id"]
     assert payload["line_count"] == 1
+
+
+def test_finalize_empty_lines_rejected(client):
+    api, Session = client
+    seed = _seed_owner(Session, username="fn_empty")
+    oh, _u = _login(api, "fn_empty")
+    sh, _su = _store_headers(api, oh, seed["store_id"], "fn_empty_st")
+    doc = _create_opname(api, sh).json()
+    res = _finalize(api, sh, doc["id"])
+    assert res.status_code == 400, res.text
+    assert "qator" in res.text.lower()
+    db = Session()
+    try:
+        op = db.get(StockOpname, doc["id"])
+        assert op.status == "OPEN"
+        assert op.posted_at is None
+        assert db.query(StockOpnameLine).filter(StockOpnameLine.opname_id == doc["id"]).count() == 0
+    finally:
+        db.close()
+    assert _adjust_movements(Session, opname_id=doc["id"]) == []
+    assert _audit(Session) == []
+
+
+def test_finalize_uses_latest_patched_counted_qty(client):
+    api, Session = client
+    seed = _seed_owner(Session, username="fn_flush")
+    oh, _u = _login(api, "fn_flush")
+    p = _product(api, oh, barcode="9400000000019", stock=10)
+    sh, _su = _store_headers(api, oh, seed["store_id"], "fn_flush_st")
+    doc = _create_opname(api, sh).json()
+    line = _add_line(api, sh, doc["id"], p["id"], counted=5)
+    _set_counted(api, sh, doc["id"], line["id"], 8)
+    res = _finalize(api, sh, doc["id"])
+    assert res.status_code == 200, res.text
+    assert _stock(Session, p["id"]) == 8
+    db = Session()
+    try:
+        ln = db.get(StockOpnameLine, line["id"])
+        assert ln.counted_qty == 8
+        assert ln.difference == -2
+    finally:
+        db.close()
+    movs = _adjust_movements(Session, product_id=p["id"], opname_id=doc["id"])
+    assert len(movs) == 1
+    assert movs[0].qty == -2
+
+
+def test_app_js_flushes_counted_before_opname_finalize():
+    import os
+    js_path = os.path.join(os.path.dirname(__file__), "..", "app", "web", "assets", "app.js")
+    with open(js_path, encoding="utf-8") as fh:
+        js = fh.read()
+    fn = js.find("async function flushOpnameCountedInputs")
+    click = js.find('getElementById("op-finalize")')
+    flush_call = js.find("await flushOpnameCountedInputs()", click)
+    api_call = js.find("/finalize", click)
+    assert fn != -1
+    assert click != -1
+    assert flush_call != -1
+    assert api_call != -1
+    assert fn < click
+    assert flush_call < api_call
+
+
+def test_finalize_concurrent_only_one_posted(tmp_path):
+    """Two overlapping ASGI finalize calls: CAS allows one POSTED, one 409."""
+    import httpx
+
+    _rate.clear()
+    db_path = tmp_path / "opname_race.db"
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+        poolclass=NullPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    def override_db():
+        s = Session()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    app.dependency_overrides[get_db] = override_db
+    api = TestClient(app)
+    try:
+        seed = _seed_owner(Session, username="fn_race")
+        oh, _u = _login(api, "fn_race")
+        p = _product(api, oh, barcode="9400000000020", stock=10)
+        sh, _su = _store_headers(api, oh, seed["store_id"], "fn_race_st")
+        doc = _create_opname(api, sh).json()
+        _add_line(api, sh, doc["id"], p["id"], counted=7)
+        oid = doc["id"]
+        url = f"/api/stock-opnames/{oid}/finalize"
+        headers = {k: v for k, v in sh.items()}
+
+        async def _race():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                return await asyncio.gather(
+                    ac.post(url, headers=headers),
+                    ac.post(url, headers=headers),
+                )
+
+        r1, r2 = asyncio.run(_race())
+        codes = sorted([r1.status_code, r2.status_code])
+        assert codes == [200, 409], (r1.status_code, r1.text, r2.status_code, r2.text)
+        assert _stock(Session, p["id"]) == 7
+        assert len(_adjust_movements(Session, opname_id=oid)) == 1
+        assert len(_audit(Session)) == 1
+        db = Session()
+        try:
+            op = db.get(StockOpname, oid)
+            assert op.status == "POSTED"
+        finally:
+            db.close()
+    finally:
+        app.dependency_overrides.clear()
+        _rate.clear()

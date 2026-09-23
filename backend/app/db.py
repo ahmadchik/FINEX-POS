@@ -8,7 +8,7 @@ class Base(DeclarativeBase):
     pass
 
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False, "timeout": 30} if settings.database_url.startswith("sqlite") else {}
 engine = create_engine(settings.database_url, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
@@ -46,6 +46,7 @@ def ensure_schema():
         ("customers", "credit_limit", "FLOAT DEFAULT 0"),
         ("customers", "is_active", "BOOLEAN DEFAULT 1"),
         ("stock_ins", "supplier_id", "INTEGER"),
+        ("stock_ins", "idempotency_key", "VARCHAR(64)"),
     ]
     with engine.begin() as conn:
         for table, col, typ in extras:
@@ -99,6 +100,14 @@ def ensure_schema():
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_stock_movements_company_store_created "
                     "ON stock_movements(company_id, store_id, created_at)"
+                )
+            )
+        if "stock_ins" in tables:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_ins_company_store_idempotency "
+                    "ON stock_ins(company_id, store_id, idempotency_key) "
+                    "WHERE idempotency_key IS NOT NULL AND idempotency_key != ''"
                 )
             )
         if "stock_opnames" in tables:

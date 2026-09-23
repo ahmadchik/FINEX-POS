@@ -140,7 +140,7 @@ export async function pageTransfers(api) {
   const isCompany = !!(u && (u.cabinet ? u.cabinet === "company" : (u.role === "OWNER" || u.role === "ADMIN")));
   const fetches = isCompany
     ? [api("/api/transfers")]
-    : [api("/api/transfer-stores"), api("/api/products"), api("/api/transfers")];
+    : [api("/api/transfer-stores"), api("/api/products?limit=500"), api("/api/transfers")];
   const results = await Promise.all(fetches);
   const stores = isCompany ? [] : results[0];
   const products = isCompany ? [] : (results[1] || []).filter((p) => p.is_active !== false);
