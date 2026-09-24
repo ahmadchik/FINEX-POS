@@ -41,6 +41,8 @@ def user_out(db: Session, user: User) -> UserOut:
         company_name=company.name if company else "",
         store_id=store.id if store else None,
         store_name=store.name if store else None,
+        phone=(company.phone if company else "") or "",
+        store_phone=(store.phone if store else None) or None,
         plan=company.plan if company else "FREE",
         account_no=company.account_no if company else None,
         permissions=sorted(ROLE_PERMS.get(user.role, set())),

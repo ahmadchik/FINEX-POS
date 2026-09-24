@@ -324,17 +324,35 @@ async function pageDashboard() {
 }
 
 
-function cennikShopName() {
+function paymentTypeLabel(v) {
+  const m = String(v || "").toUpperCase();
+  if (m === "CASH") return "Naqd";
+  if (m === "CARD") return "Karta";
+  if (m === "ONLINE") return "Online";
+  if (m === "MIXED") return "Aralash";
+  if (m === "CREDIT") return "Qarz";
+  return String(v || "");
+}
+
+function printOrg() {
   const u = user() || {};
-  return (u.store_name || u.company_name || "FINEX POS").trim();
+  const s = loadLocalSettings() || {};
+  return {
+    company: String(s.company_name || u.company_name || "").trim(),
+    store: String(s.store_name || u.store_name || "").trim(),
+    phone: String(s.store_phone || s.phone || u.store_phone || u.phone || "").trim(),
+  };
 }
 
 function cennikLabelHtml(p) {
+  const org = printOrg();
+  const company = org.company ? `<div class="cennik-company">${esc(org.company)}</div>` : "";
+  const store = org.store ? `<div class="cennik-shop">${esc(org.store)}</div>` : "";
   return `<article class="cennik-label">
-    <div class="cennik-shop">${esc(cennikShopName())}</div>
+    ${company}${store}
     <div class="cennik-name">${esc(p.name || "")}</div>
     <svg class="cennik-barcode"></svg>
-    <div class="cennik-price">Jami: ${money(p.sell_price)}</div>
+    <div class="cennik-price">${money(p.sell_price)}</div>
   </article>`;
 }
 
@@ -352,9 +370,9 @@ function drawCennikBarcodes(root, code) {
         lineColor: "#111",
         background: "#fff",
         width: 1.2,
-        height: 28,
+        height: 22,
         displayValue: true,
-        fontSize: 9,
+        fontSize: 8,
         margin: 0,
         textMargin: 1,
       });
@@ -365,9 +383,9 @@ function drawCennikBarcodes(root, code) {
           lineColor: "#111",
           background: "#fff",
           width: 1,
-          height: 28,
+          height: 22,
           displayValue: true,
-          fontSize: 9,
+          fontSize: 8,
           margin: 0,
         });
       } catch (e2) {
@@ -420,9 +438,14 @@ function openCennikModal(p) {
   document.getElementById("cennik-qty").addEventListener("input", (e) => fillCennikSheet(p, e.target.value));
   document.getElementById("cennik-print").onclick = () => {
     fillCennikSheet(p, document.getElementById("cennik-qty")?.value);
+    document.body.classList.remove("printing-receipt");
     document.body.classList.add("printing-cennik");
+    const done = () => {
+      document.body.classList.remove("printing-cennik");
+      window.removeEventListener("afterprint", done);
+    };
+    window.addEventListener("afterprint", done);
     window.print();
-    document.body.classList.remove("printing-cennik");
   };
   modal.onclick = (e) => {
     if (e.target === modal) close();
@@ -1524,39 +1547,62 @@ function updatePayHints() {
 function showReceipt(sale) {
   const modal = document.getElementById("receipt-modal");
   if (!modal) return;
-  const u = user();
+  const org = printOrg();
+  const items = sale.items || [];
+  const itemRows = items
+    .map(
+      (i) => `<tr>
+        <td>${esc(i.name)}</td>
+        <td>${esc(i.qty)}</td>
+        <td>${money(i.line_total)}</td>
+      </tr>`,
+    )
+    .join("");
+  const company = org.company ? `<div class="receipt-company">${esc(org.company)}</div>` : "";
+  const store = org.store ? `<div class="receipt-store">${esc(org.store)}</div>` : "";
+  const phone = org.phone ? `<p class="receipt-phone">${esc(org.phone)}</p>` : "";
+  const change = Number(sale.change_amount || 0);
   modal.classList.remove("hidden");
   modal.innerHTML = `
     <div>
       <div class="receipt" id="receipt">
-        <h3>${esc(u.company_name)}</h3>
-        <div class="muted" style="text-align:center;color:#444">${esc(u.store_name || "")}</div>
-        <hr />
-        <div class="line"><span>${esc(sale.number)}</span><span>${esc((sale.created_at || "").slice(0, 19).replace("T", " "))}</span></div>
-        <div class="line"><span>Kassir</span><span>${esc(sale.cashier || u.full_name)}</span></div>
-        ${sale.customer_name ? `<div class="line"><span>Mijoz</span><span>${esc(sale.customer_name)}</span></div>` : ""}
-        <hr />
-        ${(sale.items || []).map((i) => `<div class="line"><span>${esc(i.name)} × ${i.qty}</span><span>${money(i.line_total)}</span></div>`).join("")}
-        <hr />
-        <div class="line"><span>Oraliq</span><span>${money(sale.subtotal)}</span></div>
+        ${company}${store}
+        <div class="receipt-meta">Sotuv cheki №${esc(sale.number || "")}</div>
+        <div class="receipt-meta">${esc(fmtDate(sale.created_at))}</div>
+        ${sale.customer_name ? `<div class="receipt-meta">Mijoz: ${esc(sale.customer_name)}</div>` : ""}
+        <table class="receipt-items">
+          <thead>
+            <tr><th>Mahsulot</th><th>Miqdor</th><th>Summa</th></tr>
+          </thead>
+          <tbody>${itemRows}</tbody>
+        </table>
         ${sale.discount ? `<div class="line"><span>Chegirma</span><span>-${money(sale.discount)}</span></div>` : ""}
-        <div class="line"><b>Jami</b><b>${money(sale.total)}</b></div>
+        <div class="line receipt-total"><span>Jami</span><span>${money(sale.total)}</span></div>
         ${Number(sale.tax_total) > 0 ? `<div class="line"><span>QQS (kiritilgan)</span><span>${money(sale.tax_total)}</span></div>` : ""}
-        <div class="line"><span>To‘lov</span><span>${esc(sale.payment_type || "")}</span></div>
-        <div class="line"><span>Naqd</span><span>${money(sale.paid_cash)}</span></div>
+        <div class="line"><span>To‘lov</span><span>${esc(paymentTypeLabel(sale.payment_type))}</span></div>
+        ${Number(sale.paid_cash) ? `<div class="line"><span>Naqd</span><span>${money(sale.paid_cash)}</span></div>` : ""}
         ${sale.paid_card ? `<div class="line"><span>Karta</span><span>${money(sale.paid_card)}</span></div>` : ""}
         ${sale.paid_online ? `<div class="line"><span>Online</span><span>${money(sale.paid_online)}</span></div>` : ""}
         ${sale.on_credit ? `<div class="line"><span>Qarz</span><span>${money(sale.on_credit)}</span></div>` : ""}
-        <div class="line"><span>Qaytim</span><span>${money(sale.change_amount)}</span></div>
-        <p style="text-align:center;font-size:12px;margin:12px 0 0">Rahmat!</p>
-        <p style="text-align:center;font-size:11px;color:#666;margin:6px 0 0">FINEX POS</p>
+        ${change ? `<div class="line"><span>Qaytim</span><span>${money(change)}</span></div>` : ""}
+        ${phone}
+        <p class="receipt-thanks">Rahmat!</p>
       </div>
       <div class="modal-actions">
         <button class="btn btn-gold" id="print-receipt">Chop etish</button>
         <button class="btn btn-ghost" id="close-receipt">Yopish</button>
       </div>
     </div>`;
-  document.getElementById("print-receipt").onclick = () => window.print();
+  document.getElementById("print-receipt").onclick = () => {
+    document.body.classList.remove("printing-cennik");
+    document.body.classList.add("printing-receipt");
+    const done = () => {
+      document.body.classList.remove("printing-receipt");
+      window.removeEventListener("afterprint", done);
+    };
+    window.addEventListener("afterprint", done);
+    window.print();
+  };
   document.getElementById("close-receipt").onclick = () => modal.classList.add("hidden");
   modal.onclick = (e) => {
     if (e.target === modal) modal.classList.add("hidden");

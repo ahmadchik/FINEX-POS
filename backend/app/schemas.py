@@ -32,6 +32,8 @@ class UserOut(BaseModel):
     company_name: str
     store_id: Optional[int]
     store_name: Optional[str]
+    phone: str = ""
+    store_phone: Optional[str] = None
     plan: str
     account_no: Optional[int] = None
     permissions: list[str]
