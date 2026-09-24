@@ -372,20 +372,59 @@ select.field.need-customer {
   border-radius: 12px;
 }
 .cennik-label {
-  width: 58mm;
-  height: 30mm;
+  width: var(--cennik-w, 58mm);
+  height: var(--cennik-h, 30mm);
   background: #fff;
   color: #111;
   border: 1px solid #ddd;
   border-radius: 2px;
-  padding: 1.6mm 2mm 1.2mm;
+  padding: 1.4mm 2mm 1.2mm;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 0.5mm;
   box-sizing: border-box;
   overflow: hidden;
   font-family: Arial, Helvetica, sans-serif;
+}
+.cennik-label[data-size="58x30"] {
+  justify-content: space-between;
+  gap: 0;
+}
+.cennik-barcode-wrap {
+  width: 100%;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+.cennik-label[data-size="58x30"] .cennik-barcode-wrap { height: 8.4mm; }
+.cennik-label[data-size="58x40"] .cennik-barcode-wrap,
+.cennik-label[data-size="60x40"] .cennik-barcode-wrap,
+.cennik-label[data-size="80x40"] .cennik-barcode-wrap { height: 16mm; }
+.cennik-label[data-size="58x40"] .cennik-company,
+.cennik-label[data-size="58x40"] .cennik-shop,
+.cennik-label[data-size="60x40"] .cennik-company,
+.cennik-label[data-size="60x40"] .cennik-shop,
+.cennik-label[data-size="80x40"] .cennik-company,
+.cennik-label[data-size="80x40"] .cennik-shop {
+  font-size: 5.5px;
+  max-height: 3.2mm;
+}
+.cennik-label[data-size="58x40"] .cennik-name,
+.cennik-label[data-size="60x40"] .cennik-name,
+.cennik-label[data-size="80x40"] .cennik-name {
+  font-size: 8px;
+  max-height: 6.2mm;
+}
+.cennik-label[data-size="58x40"] .cennik-price,
+.cennik-label[data-size="60x40"] .cennik-price,
+.cennik-label[data-size="80x40"] .cennik-price {
+  font-size: 11px;
+  margin-top: auto;
 }
 .cennik-shop {
   font-size: 6px;
@@ -406,12 +445,22 @@ select.field.need-customer {
   line-height: 1.1;
   max-height: 6.4mm;
   overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: #000;
   width: 100%;
+  flex: 0 1 auto;
 }
 .cennik-barcode, .cennik-barcode-ph {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+}
+.cennik-label[data-size="58x30"] .cennik-barcode,
+.cennik-label[data-size="58x30"] .cennik-barcode-ph {
   width: 52mm;
-  max-height: 8mm;
+  max-height: 8.4mm;
 }
 .cennik-barcode-ph {
   font-size: 9px;
@@ -517,7 +566,7 @@ select.field.need-customer {
 @media print {
   @page { margin: 0; }
   @page receipt { size: 80mm auto; margin: 0; }
-  @page sticker { size: 58mm 30mm; margin: 0; }
+  @page sticker { size: var(--cennik-w, 58mm) var(--cennik-h, 30mm); margin: 0; }
   html, body {
     margin: 0 !important;
     padding: 0 !important;
@@ -564,7 +613,7 @@ select.field.need-customer {
     margin: 0 !important;
   }
   body.printing-cennik {
-    width: 58mm;
+    width: var(--cennik-w, 58mm);
   }
   body.printing-cennik .cennik-dialog {
     width: auto !important;

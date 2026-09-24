@@ -344,58 +344,65 @@ function printOrg() {
   };
 }
 
-function cennikLabelHtml(p) {
+function cennikLabelHtml(p, sizeId) {
   const org = printOrg();
+  const spec = getLabelSpec(sizeId);
   const company = org.company ? `<div class="cennik-company">${esc(org.company)}</div>` : "";
   const store = org.store ? `<div class="cennik-shop">${esc(org.store)}</div>` : "";
-  return `<article class="cennik-label">
+  return `<article class="cennik-label" data-size="${esc(spec.id)}" style="width:${spec.w}mm;height:${spec.h}mm">
     ${company}${store}
     <div class="cennik-name">${esc(p.name || "")}</div>
-    <svg class="cennik-barcode"></svg>
+    <div class="cennik-barcode-wrap">
+      <svg class="cennik-barcode"></svg>
+    </div>
     <div class="cennik-price">${money(p.sell_price)}</div>
   </article>`;
 }
 
-function drawCennikBarcodes(root, code) {
+function drawCennikBarcodes(root, code, sizeId) {
+  const spec = getLabelSpec(sizeId);
   const value = String(code || "").trim() || "000000";
   const nodes = root ? root.querySelectorAll("svg.cennik-barcode") : [];
+  const opts = {
+    format: "CODE128",
+    lineColor: "#111",
+    background: "#fff",
+    width: spec.module,
+    height: spec.barPx,
+    displayValue: true,
+    fontSize: spec.font,
+    margin: spec.margin,
+    textMargin: 2,
+    textAlign: "center",
+    fontOptions: "bold",
+  };
   nodes.forEach((svg) => {
     if (typeof window.JsBarcode !== "function") {
       svg.outerHTML = '<div class="cennik-barcode-ph">' + esc(value) + "</div>";
       return;
     }
     try {
-      window.JsBarcode(svg, value, {
-        format: "CODE128",
-        lineColor: "#111",
-        background: "#fff",
-        width: 1.2,
-        height: 22,
-        displayValue: true,
-        fontSize: 8,
-        margin: 0,
-        textMargin: 1,
-      });
+      window.JsBarcode(svg, value, opts);
     } catch (e) {
       try {
-        window.JsBarcode(svg, value, {
-          format: "CODE39",
-          lineColor: "#111",
-          background: "#fff",
-          width: 1,
-          height: 22,
-          displayValue: true,
-          fontSize: 8,
-          margin: 0,
-        });
+        window.JsBarcode(svg, value, { ...opts, format: "CODE39", width: Math.max(1, spec.module - 0.3) });
       } catch (e2) {
         svg.insertAdjacentHTML("afterend", '<div class="cennik-barcode-ph">' + esc(value) + "</div>");
+        return;
       }
     }
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.style.width = spec.w - 8 + "mm";
+    svg.style.height = spec.barcodeMm + "mm";
+    svg.style.maxWidth = "100%";
+    svg.style.maxHeight = spec.barcodeMm + "mm";
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
   });
 }
 
 function fillCennikSheet(p, qty) {
+  syncCennikPageStyle();
   const sheet = document.getElementById("cennik-sheet");
   const preview = document.getElementById("cennik-preview");
   const n = Math.max(1, Math.min(200, Number(qty) || 1));
@@ -418,7 +425,7 @@ function openCennikModal(p) {
         </div>
         <button type="button" class="btn btn-ghost btn-sm" id="cennik-close">Yopish</button>
       </div>
-      <p class="muted">Termoetiketka 58×30 mm — ${esc(p.name || "")}</p>
+      <p class="muted">Termoetiketka ${getLabelSpec().w}×${getLabelSpec().h} mm — ${esc(p.name || "")}</p>
       <div class="cennik-preview-wrap" id="cennik-preview"></div>
       <div class="cennik-controls">
         <label class="set-field">Soni
@@ -437,6 +444,7 @@ function openCennikModal(p) {
   document.getElementById("cennik-close").onclick = close;
   document.getElementById("cennik-qty").addEventListener("input", (e) => fillCennikSheet(p, e.target.value));
   document.getElementById("cennik-print").onclick = () => {
+    syncCennikPageStyle();
     fillCennikSheet(p, document.getElementById("cennik-qty")?.value);
     document.body.classList.remove("printing-receipt");
     document.body.classList.add("printing-cennik");
@@ -2081,7 +2089,52 @@ function loadLocalSettings() {
   }
 }
 
+
+const LABEL_PRESETS = {
+  "58x30": { id: "58x30", w: 58, h: 30, barcodeMm: 8.2, module: 1.2, barPx: 24, font: 8, margin: 4 },
+  "58x40": { id: "58x40", w: 58, h: 40, barcodeMm: 16, module: 1.7, barPx: 52, font: 12, margin: 12 },
+  "60x40": { id: "60x40", w: 60, h: 40, barcodeMm: 16, module: 1.8, barPx: 52, font: 12, margin: 12 },
+  "80x40": { id: "80x40", w: 80, h: 40, barcodeMm: 16, module: 2.2, barPx: 54, font: 13, margin: 14 },
+};
+const CENNIK_TEST_BARCODE = "31541432440254";
+
+function getLabelSizeId() {
+  const s = loadLocalSettings();
+  const saved = s && String(s.label_size || "").trim();
+  if (saved && LABEL_PRESETS[saved]) return saved;
+  if (s) return "58x30";
+  return "58x40";
+}
+
+function getLabelSpec(overrideId) {
+  const id = overrideId && LABEL_PRESETS[overrideId] ? overrideId : getLabelSizeId();
+  return LABEL_PRESETS[id] || LABEL_PRESETS["58x40"];
+}
+
+function syncCennikPageStyle() {
+  const spec = getLabelSpec();
+  const root = document.documentElement;
+  root.style.setProperty("--cennik-w", spec.w + "mm");
+  root.style.setProperty("--cennik-h", spec.h + "mm");
+  let el = document.getElementById("cennik-page-style");
+  if (!el) {
+    el = document.createElement("style");
+    el.id = "cennik-page-style";
+    document.head.appendChild(el);
+  }
+  el.textContent =
+    "@media print { @page sticker { size: " +
+    spec.w +
+    "mm " +
+    spec.h +
+    "mm; margin: 0; } body.printing-cennik { width: " +
+    spec.w +
+    "mm; } }";
+}
+
 function saveLocalSettings(data) {
+  const prev = loadLocalSettings() || {};
+  const size = String(data.label_size || prev.label_size || "").trim();
   const payload = {
     company_name: data.company_name || "",
     phone: data.phone || "",
@@ -2090,6 +2143,7 @@ function saveLocalSettings(data) {
     store_name: data.store_name || "",
     store_phone: data.store_phone || "",
     store_address: data.store_address || "",
+    label_size: LABEL_PRESETS[size] ? size : "",
   };
   localStorage.setItem(settingsKey(), JSON.stringify(payload));
 }
@@ -2319,6 +2373,29 @@ async function pageSettings() {
         </div>
       </div>
       <div id="set-msg"></div>
+    </form>
+
+    <h3 class="set-sub">Chop etish sozlamalari</h3>
+    <form id="print-set-form" class="card">
+      <p class="muted">Tanlangan o‘lcham faqat cenik/nakleyka chop etishiga ta’sir qiladi.</p>
+      <div class="set-grid">
+        <label class="set-field set-span-2">Termo nakleyka o‘lchami
+          <select class="field" name="label_size" id="label-size">
+            ${["58x30", "58x40", "60x40", "80x40"].map((id) => {
+              const s = LABEL_PRESETS[id];
+              return `<option value="${id}" ${getLabelSizeId() === id ? "selected" : ""}>${s.w} × ${s.h} mm</option>`;
+            }).join("")}
+          </select>
+        </label>
+        <div class="set-span-2">
+          <div class="cennik-preview-wrap" id="settings-cennik-preview"></div>
+        </div>
+        <div class="set-span-2">
+          <button class="btn btn-gold" type="submit">Saqlash</button>
+        </div>
+      </div>
+      <p class="muted">Test barcode: ${CENNIK_TEST_BARCODE}</p>
+      <div id="print-set-msg"></div>
     </form>
     <h3 class="set-sub">Parol</h3>
     <form id="pw-form" class="card">
@@ -3284,7 +3361,35 @@ function bindApp(page) {
     if (b) { const old = b.textContent; b.textContent = "Nusxa olindi"; setTimeout(() => { b.textContent = old; }, 2000); }
   });
 
-  const setForm = document.getElementById("set-form");
+    const printSet = document.getElementById("print-set-form");
+    if (printSet) {
+      const sample = { name: "Paxta mato", barcode: CENNIK_TEST_BARCODE, sell_price: 5000 };
+      const renderPreview = () => {
+        const sel = document.getElementById("label-size");
+        const id = sel && sel.value ? sel.value : getLabelSizeId();
+        const spec = getLabelSpec(id);
+        document.documentElement.style.setProperty("--cennik-w", spec.w + "mm");
+        document.documentElement.style.setProperty("--cennik-h", spec.h + "mm");
+        const box = document.getElementById("settings-cennik-preview");
+        if (box) {
+          box.innerHTML = cennikLabelHtml(sample, id);
+          drawCennikBarcodes(box, sample.barcode, id);
+        }
+      };
+      renderPreview();
+      document.getElementById("label-size")?.addEventListener("change", renderPreview);
+      printSet.onsubmit = (e) => {
+        e.preventDefault();
+        const sel = document.getElementById("label-size");
+        const prev = loadLocalSettings() || {};
+        saveLocalSettings({ ...prev, label_size: sel ? sel.value : getLabelSizeId() });
+        renderPreview();
+        const msg = document.getElementById("print-set-msg");
+        if (msg) msg.innerHTML = '<p class="ok">Nakleyka o‘lchami saqlandi</p>';
+      };
+    }
+
+    const setForm = document.getElementById("set-form");
   if (setForm) {
     const inn = document.getElementById("set-inn");
     inn?.addEventListener("input", () => {
